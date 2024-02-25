@@ -218,19 +218,6 @@ The R-squared value of 0.27 means that approximately 27% of the variability in t
 # Make predictions on the training dataset
 train_predictions <- predict(m1, newdata = training)
 ```
-
-
-```{r}
-# Assess the performance on the training dataset
-train_residuals <- training$TARGET_WINS  - train_predictions
-train_rmse <- sqrt(mean(train_residuals^(2)))
-cat("Multiple Regression - Root Mean Squared Error (RMSE) on Training Data:", train_rmse, "\n")
-```
-```{r}
-# Make predictions on the training dataset
-train_predictions <- predict(m1, newdata = training)
-```
-
 ```{r}
 # Assess the performance on the training dataset
 train_residuals <- training$TARGET_WINS  - train_predictions
@@ -241,7 +228,6 @@ cat("Multiple Regression - Root Mean Squared Error (RMSE) on Training Data:", tr
 ## Backward Stepwise Regression or Backward Elimination:
 
 Backward Stepwise Regression is an approach to regression analysis that initiates with a full (saturated) model, including all variables, and systematically removes variables at each step to create a reduced model that optimally explains the data. This technique, also referred to as Backward Elimination regression, is valuable for addressing issues like **multicollinearity** and **overfitting**. By eliminating variables, it helps in reducing the number of predictors, contributing to a more **parsimonious** and interpretable model. This 'stepwise' approach aids in enhancing the model's generalization and interpretability by focusing on the most influential variables while eliminating those with lesser impact.
-
 
 ## Model 2(m2):
 
@@ -294,7 +280,6 @@ abline(v = 5, lwd = 3, lty = 2)
 ```
 
 From the above VIF() and the VID plot, we find out that independent variables: 'TEAM_BATTING_HR' 'TEAM_BATTING_SO', 'TEAM_PITCHING_HR' and 'TEAM_PITCHING_SO' are highly correlated with each other. This can  reduce the reliability of statistical inferences and  undermines the uniqueness of information within our regression  model. Therefore, will eliminate these correlated variables in our 3rd multiple regression model as well as 'TEAM_BATTING_2B' as it has low to no significance in our model. 
-
 
 ```{r}
 colnames(training)
@@ -472,11 +457,10 @@ Subsequently, the data preparation stage involved wrangling the training data, w
 
 Following model creation, a rigorous evaluation process ensued to select the most robust model, considering the statistical significance of its features. Once the optimal model was identified, it was applied to the evaluation dataset to generate predictions for the target variable, thereby concluding the analysis.
 
-**source:**
 
+**source:**
 https://www.projectpro.io/recipes/find-vif-on-data-r
 https://www.rdocumentation.org/packages/GGally/versions/2.2.0/topics/ggpairs 
-
 https://www.rdocumentation.org/packages/regclass/versions/1.6/topics/VIF
 https://www.statology.org/variance-inflation-factor-r/
 
