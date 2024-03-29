@@ -1,0 +1,810 @@
+---
+title: "Data 621 Assignment 3"
+author: "Bridget Boakye, Hazal Gunduz and Farhana Akther"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    toc: yes
+    toc_depth: '3'
+    latex_engine: xelatex
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+\pagebreak
+
+
+# Overview:
+
+|   In this assignment we will explore, analyze, and build a binary logistic regression model to predict whether a particular neighborhood will be at risk for high crime levels.
+
+|   We are provided with data on 466 neighborhoods, including 12 predictor variables and 1 response variable. The response variable indicates whether the crime rate exceeds the median (1) or not (0). 
+
+
+## Loading libraries:
+
+```{r warning=FALSE, message=FALSE}
+
+library(dplyr)
+library(GGally)
+library(ggplot2)
+library(readr)
+library(reshape2)
+library(purrr)
+library(tidyr)
+library(corrplot)
+library(MASS)
+library(caret)
+library(e1071)
+library(ROCR)
+library(pROC)
+library(car)
+
+```
+
+
+# 1. DATA EXPLORATION:
+
+In this first step, we're going to look closely at the training data set to understand it better before we start preparing our models. 
+
+## Loading Data:
+
+The datasets (training and evaluation) has been uploaded to a GitHub repository, from which it has been loaded into the markdown using the code chunk provided below. The rationale behind uploading it to GitHub is to maintain the reproducibility of the work.
+
+```{r Data Importation}
+
+set.seed(2024)
+
+crime_training <- read.csv("https://raw.githubusercontent.com/breboa/Data621/main/crime-training-data_modified.csv", header=TRUE, sep=",")
+crime_evaluation <- read.csv("https://raw.githubusercontent.com/breboa/Data621/main/crime-evaluation-data_modified.csv", header=TRUE, sep=",")
+```
+
+
+\newpage
+
+
+### Data Dimension:
+
+```{r}
+
+head(crime_training)
+dim(crime_training)
+
+```
+
+The dataset contains 466 records, with the 12 predictors and 1 target variable with the following features:
+
+znn: proportion of residential land zoned for large lots (over 25000 square feet) (predictor variable)
+indus: proportion of non-retail business acres per suburb (predictor variable)
+chas: a dummy var. for whether the suburb borders the Charles River (1) or not (0) (predictor variable)
+nox: nitrogen oxides concentration (parts per 10 million) (predictor variable)
+rm: average number of rooms per dwelling (predictor variable)
+age: proportion of owner-occupied units built prior to 1940 (predictor variable)
+dis: weighted mean of distances to five Boston employment centers (predictor variable)
+rad: index of accessibility to radial highways (predictor variable)
+tax: full-value property-tax rate per $10,000 (predictor variable)
+ptratio: pupil-teacher ratio by town (predictor variable)
+lstat: lower status of the population (percent) (predictor variable)
+medv: median value of owner-occupied homes in $1000s (predictor variable)
+target: whether the crime rate is above the median crime rate (1) or not (0) (response variable)
+
+All the predictors are numerical and integer types. 
+
+
+\newpage
+
+
+### Descriptive Summary Statistics:
+
+```{r}
+summary(crime_training)
+```
+
+The summary confirms the following information about the predictors, which is also stated in their description: 
+- There are 4 variables that are proportions: zn, indus, age, and lstat
+- There is one dummy variable: 'chas'
+- There are also no missing values.
+
+The following code also confirms that there are not any missing values in the data set that needs to be imputed.
+
+
+\newpage
+
+```{r}
+knitr::kable(colSums(is.na(crime_training)))
+```
+
+
+\newpage
+
+
+## Check Distribution of All the Variables:
+
+### Histograms
+
+```{r, warning=FALSE}
+data_long <- crime_training %>%
+  select_if(is.numeric) %>%  
+  gather(key = "Variable", value = "Value")  
+
+ggplot(data_long, aes(x = Value)) + 
+  geom_histogram(bins = 30, fill = "gray", color = "black") + 
+  facet_wrap(~ Variable, scales = "free") + 
+  theme_minimal() + 
+  labs(x = "value", y = "Frequency") +
+ theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+| With the exception of rm, none the predictors appear normal from the histogram. 
+
+```{r}
+
+skewness_values <- sapply(crime_training, function(x) {
+  if(is.numeric(x)) skewness(x, na.rm = FALSE)
+  else NA 
+})
+
+skewness_values <- skewness_values[!is.na(skewness_values)]
+
+print(skewness_values)
+```
+
+| Skewness check confirms most variables except indus and rm are highly skewed. Logistic regression does not require the dependent variable to be normally distributed, but extreme skewness in independent variables might influence model estimates and interpretations. Variables with skewness greater than 1 may be good candidates for transformation. 
+
+## Boxplots of feature variables 
+
+```{r, warning=FALSE}
+
+ggplot(stack(crime_training), aes(x = ind, y = values)) +
+  geom_boxplot(color = "blue", fill = "blue", alpha = 0.3, 
+               outlier.colour = "red", outlier.fill = "red",
+               outlier.size = 3) + 
+  labs(title = "Boxplot of feature variables") + 
+  scale_y_log10()
+```
+
+
+| Boxplots of the feature variables validate the skewness observed in the corresponding histograms. The spread and skewness of variables vary considerably, with some variables having a larger IQR (e.g., tax), suggesting greater variability, and some with a more symmetric distribution (e.g., rm).There seems to be several outliers for many of the variables as well, highlighted by the red dots.
+
+
+
+\pagebreak
+
+
+|   We can also observe the correlation of our variables with each other that is 'multicollinearity' on the next plot:
+
+```{r}
+corrplot(cor(crime_training))
+```
+
+|   The corrplot shows that there are strong positive correlations between this target variable and certain predictors: NO (nox) levels, the age of dwellings (age), the accessibility to radial highways (rad), non-retail business acres per suburb (indus), and the property tax rate (tax). In contrast, the target variable has a strong negative correlation with the proximity to employment centers in the metropolitan area (dis), indicating that as the distance to these centers increases, the likelihood of the area having a higher crime rate also increases.
+
+|   In addition to the relationships with the target variable, the plot highlights significant correlations among some predictors themselves, *multicollinearity*. Notably, the industrial proportion of the area (indus), NO levels (nox), the age of dwellings (age), and the distance to employment centers (dis) are interrelated. A particularly strong correlation is observed between the accessibility to highways (rad) and the property tax rate (tax), suggesting that areas with better highway access also tend to have higher property tax rates.
+
+|   These correlations suggest underlying patterns or factors that might influence crime rates, such as environmental pollution (NO levels), older housing infrastructure (age), and economic factors (tax rates and job accessibility), which will be useful for modelling, although worthwhile to note that correlation is not causation. 
+
+
+\pagebreak
+
+
+
+### Unique Values and Modes:
+
+|   The histogram also shows that several predictors, including indus, ptratio, rad, tax, and zn, have pronounced modes, that is, single over represented values. We examine value frequencies within in these variables to determine how to treat them. 
+
+
+```{r}
+
+print('Indus values with the highest frequency: ')
+sort(table(crime_training$indus), decreasing = TRUE)[1:10]
+
+print('Ptratio values with the highest frequency: ')
+sort(table(crime_training$ptratio), decreasing = TRUE)[1:10]
+
+print('Rad values with the highest frequency: ')
+sort(table(crime_training$rad), decreasing = TRUE)[1:10]
+
+print('Tax values with the highest frequency: ')
+sort(table(crime_training$tax), decreasing = TRUE)[1:10]
+
+print('Zn values with the highest frequency: ')
+sort(table(crime_training$zn), decreasing = TRUE)[1:10]
+
+```
+
+|   We can see that rad only has 9 unique values. 
+
+|   For indus, rad, and tax, the most common values appear 121 times. The fact that these most frequent values are shared across the three different variables at the same occurrence rate suggests that there may be a non-random pattern or relationship between them. We investigate using the code below: 
+
+```{r}
+
+crime_training %>% filter(indus == 18.1) %>% filter(ptratio == 20.2) %>% filter(tax == 666) %>% nrow() #confirms count of 121 rows sharing same value
+
+```
+
+| Specifying the rows where the most common values occurs confirms there is an overlap. This likely represents a cluster, where observations may not be random and could have an underlying factor linking them together.
+
+```{r}
+
+print('Proportion of cluster above median crime rate: ')
+
+crime_training %>% filter(indus == 18.1) %>% filter(ptratio == 20.2) %>% filter(tax == 666) %>% summarize(median(target))
+
+100*round(121/nrow(crime_training),2) #proportion of all observations
+100*round(121/nrow(crime_training[crime_training$target == 1,]),2) #proportion of high crime neighborhoods
+```
+
+|   Moreover, every neighborhood within this group of rows (121 of them) has a crime rate that is above the median value for the dataset. This isn't just a cluster of similar values for indus, rad, and tax; it's also specifically a cluster that has implications for this data across neighborhoods. The cluster represents 26% of all observations and over half of the high crime neighborhoods.
+
+
+```{r}
+
+table((crime_training$rad[crime_training$target ==1]))
+```
+
+|   A frequency table of the variable 'rad' where the target variable equals 1 reveals that the 229 neighborhoods identified as having high crime rates are unevenly distributed across the different index levels of the rad variable. This indicates that the presence of high crime does not occur uniformly across all values of radial highways. Moreover, the lowest categories of the rad index (specifically, values 1 and 2 that does not appear in the table), there are no neighborhoods classified as high crime. But the overall relationship between rad and high crime rates doesn't follow a simple linear trend as there is no increase or decrease in high crime neighborhoods. 
+
+|   This suggests a complex relationship between highway accessibility (radial highways) and neighborhood crime rates. The absence of high crime in neighborhoods with the least highway access could reflect the positive aspects of reduced traffic and greater community cohesion, while the uneven distribution of high crime across other rad values highlights the multifaceted impact of highways on urban areas. In neighborhoods with especially high access to highways (24) however, there is a clear jump in high crime (121). 
+
+
+\pagebreak
+
+
+
+## Checking for Imbalance Data:
+
+```{r}
+# Check class distribution
+class_distribution <- table(crime_training$target)
+print(class_distribution)
+barplot(class_distribution, main = "Class Distribution", xlab = "Class", ylab = "Frequency", col = "skyblue")
+```
+| From the above looks the class distribution is pretty balanced with  237 of  0s and 229 of 1s.
+
+
+\pagebreak
+
+
+# 2. DATA PREPARATION:
+
+In our data preparation, we seek to address skewness within specific variables (zn, dis, and rad) to better fulfill the assumptions of normality for binary regression. 
+
+
+### Overdispersion in 'zn'
+
+From the table chart and histograms in part 1, it is clear 0 occurs very frequently in the predictor variable 'zn'. Count shows 0 occurs for 339 observations out of 466.
+
+```{r}
+
+count(crime_training,zn)
+
+```
+
+|  Count shows 0 occurs for 339 observations out of 466. This represents 72.75% of the observations, a higher number of 0s than expected, potentially leading to overdispersion. To address this, we convert zn variable into a binary variable (0 and 1) that indicates the presence or absence of zoning for large residential lots.
+
+```{r}
+
+crime_training$zn <- ifelse(crime_training$zn == 0, 0, 1) # 0 indicates that the neighborhood does not have residential land zoned for large lots and 1 indicates that it does
+
+count(crime_training, zn)
+```
+
+
+### Log transform highly skewed variables 
+
+We identified in part 1 that 4 variables (medv, rad, dis, and lstat) are highly skewed, with skewness greater than 1. chas as a categorical variable will be treated as a factor. 
+
+```{r}
+
+
+crime_training_transf <- crime_training %>%
+  mutate(
+    medv = as.numeric(medv),
+    rad = as.numeric(rad),
+    dis = as.numeric(dis),
+    lstat = as.numeric(lstat)
+  ) %>%
+  mutate(
+    medv = if_else(is.numeric(medv) & !is.na(medv) & medv > 0, log(medv), NA_real_),
+    rad = if_else(is.numeric(rad) & !is.na(rad) & rad > 0, log(rad), NA_real_),
+    dis = if_else(is.numeric(dis) & !is.na(dis) & dis > 0, log(dis), NA_real_),
+    lstat = if_else(is.numeric(lstat) & !is.na(lstat) & lstat > 0, log(lstat), NA_real_)
+  )
+
+```
+
+
+```{r}
+skewness_values_transformed <- sapply(crime_training_transf, function(x) {
+  if(is.numeric(x)) skewness(x, na.rm = FALSE)
+  else NA 
+})
+
+skewness_values_trasnformed <- skewness_values_transformed[!is.na(skewness_values_transformed)]
+
+print(skewness_values_trasnformed)
+```
+
+Skewness function shows medv, dis, rad, and lstat all have skewness values below 1 after log transformation. 
+
+
+\pagebreak
+
+
+### Change categorical variables to factors 
+
+Finally, we change the two categorical variables in the dataset, chas and target, to factors. This transformation is crucial for statistical modeling, as it ensures that these variables are treated appropriately in terms of degrees of freedom. 
+
+```{r}
+crime_training$chas = as.factor(crime_training_transf$chas)
+
+crime_training$target = as.factor(crime_training_transf$target)
+
+summary(crime_training)
+```
+
+
+```{r}
+crime_training_transf$chas = as.factor(crime_training_transf$chas)
+
+crime_training_transf$target = as.factor(crime_training_transf$target)
+```
+
+
+\pagebreak
+
+
+# 3. BUILD MODELS:
+
+|  After completing the data preparation phase, we brainstormed to determine the optimal approach for constructing a suitable model design process. Considering the dataset, we divided our data into separate training and test sets. This allowed us to utilize 80% of the data for model building, while reserving the remaining 20% for evaluating the performance of our models through predictions.
+
+
+```{r}
+set.seed(2025)
+split <- createDataPartition(crime_training$target, p=0.80, list=FALSE)
+train <- crime_training[split, ]
+test <- crime_training[ -split, ]
+```
+
+### Model 1
+
+|  We start with the generalized linear model (glm). glm is used to fit generalized linear models specified by giving a symbolic description of the linear predictor and a description of the error distribution. The 'family' used here is binomial.
+
+```{r}
+m1 <- glm(formula = target ~ ., family = "binomial", data = train)
+summary(m1)
+```
+
+
+#### The Variance Inflation Factor (VIF): 
+
+The Variance Inflation Factor (VIF) serves as a tool for detecting 'multicollinearity' within a model. It quantifies the correlation and its strength between independent variables in a regression model. The interpretation of VIF values is as follows:
+
+    VIF < 1: No correlation
+    1 < VIF < 5: Moderate correlation
+    VIF > 5: Severe correlation
+
+To illustrate, this guide provides an example of calculating VIF for a dataset using R.
+
+```{r}
+vif(m1)
+```
+
+
+```{r}
+vif_values <- vif(m1)
+par(mar = c(3, 8, 3, 2) + 2.5)
+barplot(vif_values, main = "VIF Values", horiz = TRUE, col = "lightblue",
+        names.arg = names(vif_values), las = 2)
+abline(v = 5, lwd = 3, lty = 2)
+```
+
+|   From the code above and graph we can see that 'medv' and 'rm' has high VIF with 8.612781 and 6.752537 respectively, indicating a Severe correlation/ multicollinearity in our model. Let's check out how the VIf changes using the transformed data in our Model 2 in the next page. 
+
+
+\newpage
+
+
+
+### Model 2
+
+|   As we specified the predictors dis and rad are highly skewed. So we will log transform these variables and in model 2 we will use glm model with transformed data. This model uses all parameters with log transformations on dis and rad. Since log transform these variables, we will need to split the data set for model 2 and the rest. 
+
+```{r}
+set.seed(2026)
+split <- createDataPartition(crime_training_transf$target, p=0.80, list=FALSE)
+train_trns <- crime_training_transf[split, ]
+test_trns <- crime_training_transf[ -split, ]
+m2 <- glm(formula = target ~ ., family = "binomial", data = train_trns)
+summary(m2)
+```
+```{r}
+vif(m2)
+```
+```{r}
+
+vif_values <- vif(m2)
+par(mar = c(3, 8, 3, 2) + 2.5)
+barplot(vif_values, main = "VIF Values", horiz = TRUE, col = "lightblue",
+        names.arg = names(vif_values), las = 2)
+abline(v = 5, lwd = 3, lty = 2)
+```
+
+
+|   From above we can see that From 'medv' which had high VIF decreased from 8.612781 to 8.251438 and and 'rm' 6.752537 to  4.745416. This is good because our log transformation help us reduced the VIF for both variables, specially for 'rm' which decreased from Severe to Moderate correlation and reducing multicollinearity in our model. Now,  well examine our backward selection model's performance and how the VIF changes in Model 3. 
+
+
+\newpage
+
+
+### Model 3
+
+|  In this model, we transformed the dis and rad variables using log transformations and used backward elimination to remove non-predictive variables one at a time. As we removed variables, the AIC value decreased, indicating a better goodness of fit.
+
+```{r}
+m3 <- glm(formula = target ~ zn + nox + age + dis + rad + tax + ptratio + medv, family = "binomial", data = train_trns)
+summary(m3)
+```
+```{r}
+vif(m3)
+```
+
+```{r}
+vif_values <- vif(m3)
+par(mar = c(3, 8, 3, 2) + 2.5)
+barplot(vif_values, main = "VIF Values", horiz = TRUE, col = "lightblue",
+        names.arg = names(vif_values), las = 2)
+abline(v = 5, lwd = 3, lty = 2)
+```
+
+|   Our backward section model (m3) so far is performing better. Also by removing the remove non-predictive variables it look like the VIF for 'medv' improved tremendously from original 8.251438 to 2.633787. Let's run another 'model4' to see if we remove 'tax' based on significance if the model will perform better. 
+
+
+\newpage
+
+### Model 4
+
+```{r}
+m4 <- glm(formula = target ~ nox + age + dis + rad + tax + ptratio + medv, family = "binomial", data = train_trns)
+summary(m4)
+```
+```{r}
+vif(m4)
+```
+
+```{r}
+vif_values <- vif(m4)
+par(mar = c(3, 8, 3, 2) + 2.5)
+barplot(vif_values, main = "VIF Values", horiz = TRUE, col = "lightblue",
+        names.arg = names(vif_values), las = 2)
+abline(v = 5, lwd = 3, lty = 2)
+```
+
+|   From above it look like all the VID values went to down reducing further multicollinearity and the AIC went down by 0.82. Let's check our classification metrics and see how our models are performing. 
+
+
+\newpage
+
+
+# 4. MODEL SELECTION:
+
+### Selecting Models Based on Classification Metrics:
+
+|   Below, we set the threshold to 0.5 as instructed. We convert probabilities to classes and then convert predicted labels to factors for each of our models. Finally, we run the Confusion Matrix to evaluate their performance. 
+
+
+```{r}
+# Set threshold as per instruction 
+threshold <- 0.5 
+```
+
+
+```{r}
+preds1 = predict(m1, newdata = test, type = "response")
+
+# Convert probabilities to class preds1
+predicted_labels1 <- ifelse(preds1 >= threshold, "1", "0")
+
+# Convert predicted labels to factors
+predicted_labels_factor1 <- factor(predicted_labels1, levels = c("0", "1"))
+```
+
+```{r}
+preds2 = predict(m2, newdata = test_trns)
+
+# Convert probabilities to class preds2
+predicted_labels2 <- ifelse(preds2 >= threshold, "1", "0")
+
+# Convert predicted labels to factors
+predicted_labels_factor2 <- factor(predicted_labels2, levels = c("0", "1"))
+```
+
+```{r}
+preds3 = predict(m3, newdata = test_trns , type = "response")
+
+# Convert probabilities to class preds3
+predicted_labels3 <- ifelse(preds3 >= threshold, "1", "0")
+
+# Convert predicted labels to factors
+predicted_labels_factor3 <- factor(predicted_labels3, levels = c("0", "1"))
+```
+
+```{r}
+preds4 = predict(m4, newdata = test_trns , type = "response")
+
+# Convert probabilities to class preds4
+predicted_labels4 <- ifelse(preds4 >= threshold, "1", "0")
+
+# Convert predicted labels to factors
+predicted_labels_factor4 <- factor(predicted_labels4, levels = c("0", "1"))
+```
+
+
+#### Confusion Matrix:
+
+```{r}
+cm_m1 <- confusionMatrix(data=predicted_labels_factor1, test$target, mode = "everything")
+cat("Confusion Matrix Model 1:\n")
+print(cm_m1) 
+
+cm_m2 <- confusionMatrix(data=predicted_labels_factor2, test_trns$target, mode = "everything")
+cat("Confusion Matrix Model 2:\n")
+print(cm_m2)
+
+cm_m3 <- confusionMatrix(data=predicted_labels_factor3, test_trns$target, mode = "everything")
+cat("Confusion Matrix Model 3:\n")
+print(cm_m3)
+
+cm_m4 <- confusionMatrix(data=predicted_labels_factor4, test_trns$target, mode = "everything")
+cat("Confusion Matrix Model 4:\n")
+print(cm_m4)
+
+```
+
+
+```{r}
+par(mfrow=c(2,2))
+fourfoldplot(cm_m1$table, color = c("gray", "blue"), main="Model 1")
+fourfoldplot(cm_m2$table, color = c("gray", "blue"), main="Model 2")
+fourfoldplot(cm_m3$table, color = c("gray", "blue"), main="Model 3")
+fourfoldplot(cm_m4$table, color = c("gray", "blue"), main="Model 4")
+```
+
+It looks Model 3, which is based on backward elimination performs better than Model 2 and Model 4 when comes to confusion matrix. Let’s look at other metrics too
+
+```{r}
+eval <- data.frame(cm_m1$byClass, 
+                   cm_m2$byClass, 
+                   cm_m3$byClass, 
+                   cm_m4$byClass)
+eval <- data.frame(t(eval))
+
+eval <- dplyr::select(eval, Sensitivity, Specificity, Precision, Recall, F1, Balanced.Accuracy)
+row.names(eval) <- c("Model 1", "Model 2", "Model 3", "Model 4")
+knitr::kable(eval)
+```
+
+| Once again, Model 3 demonstrates superior performance compared to Model 2 and Model 4, exhibiting competitive sensitivity/recall, specificity, precision, and accuracy. Although in Model 4, we carried out further elimination and improved the ACI, the enhancement is marginal, merely by 0.82. Consequently, based on the aforementioned performance metrics, we opt for Model 3.
+
+
+\newpage
+
+
+### Classification Error Rate of the Predictions:
+
+ 'Classification Error Rate = FP + FN / TP + FP + TN + FN'
+
+
+**Classification error rate of the predictions Model 1:**
+
+```{r}
+confusion_matrix_m1 <- as.data.frame(table("Actual Class" = test$target, "Predicted Class" = predicted_labels_factor1))
+confusion_matrix_m1
+```
+
+```{r}
+class_error_rate1 <- (confusion_matrix_m1$Freq[3] + confusion_matrix_m1$Freq[2])/sum(confusion_matrix_m1$Freq)
+class_error_rate1
+```
+
+*Model 1 Verification of accuracy and error rate sum up to one 1*
+
+```{r}
+Accuracy1 <-  0.9457
+Verify <- round(Accuracy1+class_error_rate1)
+print(Verify)
+```
+
+**Classification error rate of the predictions Model 2:**
+
+```{r}
+confusion_matrix_m2 <- as.data.frame(table("Actual Class" = test_trns$target, "Predicted Class" = predicted_labels_factor2))
+confusion_matrix_m2
+```
+```{r}
+class_error_rate2 <- (confusion_matrix_m2$Freq[3] + confusion_matrix_m2$Freq[2])/sum(confusion_matrix_m2$Freq)
+class_error_rate2
+```
+
+*Model 2 Verification of accuracy and error rate sum up to one 1*
+```{r}
+Accuracy2 <-  0.8913
+Verify <- round(Accuracy2+class_error_rate2)
+print(Verify)
+```
+
+**Classification error rate of the predictions Model 3:**
+
+```{r}
+confusion_matrix_m3 <- as.data.frame(table("Actual Class" = test_trns$target, "Predicted Class" = predicted_labels_factor3))
+confusion_matrix_m3
+```
+
+```{r}
+class_error_rate3 <- (confusion_matrix_m3$Freq[3] + confusion_matrix_m3$Freq[2])/sum(confusion_matrix_m3$Freq)
+class_error_rate3
+```
+
+*Model 3 Verification of accuracy and error rate sum up to one 1*
+```{r}
+Accuracy3 <-  0.9239 
+Verify <- round(Accuracy3+class_error_rate3)
+print(Verify)
+```
+
+**Classification error rate of the predictions Model 4:**
+
+```{r}
+confusion_matrix_m4 <- as.data.frame(table("Actual Class" = test_trns$target, "Predicted Class" = predicted_labels_factor4))
+confusion_matrix_m4
+```
+
+```{r}
+class_error_rate4 <- (confusion_matrix_m4$Freq[3] + confusion_matrix_m4$Freq[2])/sum(confusion_matrix_m4$Freq)
+class_error_rate4
+```
+*Model 4 Verification of accuracy and error rate sum up to one 1*
+
+```{r}
+Accuracy4 <- 0.913  
+Verify <- round(Accuracy4+class_error_rate4)
+print(Verify)
+```
+
+
+\newpage
+
+
+## ROC/AUC Curves:
+
+```{r}
+pred_obj <- prediction(preds1, test$target)
+auc_value <- performance(pred_obj, "auc")@y.values[[1]]
+roc <- performance(pred_obj, "tpr", "fpr") # Calculate ROC curve
+plot(roc, main = "ROC Curve For Model 1", colorize = FALSE) # Plot ROC curve
+text(0.5, 0.5, paste("AUC =", round(auc_value, 4)), adj = c(0.5, -0.5), cex = 1.2)
+```
+
+```{r}
+pred_obj2 <- prediction(preds2, test_trns$target)
+auc_value2 <- performance(pred_obj2, "auc")@y.values[[1]]
+# Calculate ROC curve
+roc <- performance(pred_obj2, "tpr", "fpr")
+
+# Plot ROC curve
+plot(roc, main = "ROC Curve For Model 2", colorize = FALSE)
+text(0.5, 0.5, paste("AUC =", round(auc_value2, 4)), adj = c(0.5, -0.5), cex = 1.2)
+```
+
+
+```{r}
+pred_obj3 <- prediction(preds3, test_trns$target)
+auc_value3 <- performance(pred_obj3, "auc")@y.values[[1]]
+# Calculate ROC curve
+roc <- performance(pred_obj3, "tpr", "fpr")
+
+# Plot ROC curve
+plot(roc, main = "ROC Curve For Model 3", colorize = FALSE)
+text(0.5, 0.5, paste("AUC =", round(auc_value3, 4)), adj = c(0.5, -0.5), cex = 1.2)
+```
+
+```{r}
+pred_obj4 <- prediction(preds4, test_trns$target)
+auc_value4 <- performance(pred_obj4, "auc")@y.values[[1]]
+# Calculate ROC curve
+roc <- performance(pred_obj3, "tpr", "fpr")
+
+# Plot ROC curve
+plot(roc, main = "ROC Curve For Model 4", colorize = FALSE)
+text(0.5, 0.5, paste("AUC =", round(auc_value4, 4)), adj = c(0.5, -0.5), cex = 1.2)
+```
+
+
+| Indeed, the AUC values obtained from the ROC curve appear slightly higher than both the accuracy and balanced accuracy metrics. Generally, AUC values closer to 1 indicate superior model performance, particularly in terms of classification discrimination.
+
+| The discrepancy between AUC and accuracy metrics suggests that our model's predictions are well-ranked or well-discriminated across different thresholds. This phenomenon can occur if a dataset is imbalanced or if the misclassifications made by the model are not evenly distributed among classes. However, we have already verified the balance of our dataset during the data exploration phase. Therefore, we can interpret AUC values of 0.97 to 0.98 as reasonable, indicating that our model's predictions are well-separated between classes, even if the overall accuracy is slightly lower.
+
+
+
+\newpage
+
+
+## Making Predictions:
+
+#### Preprocess evaluation dataset: 
+
+```{r}
+
+crime_evaluation$zn <- ifelse(crime_evaluation$zn == 0, 0, 1) # 0 indicates that the neighborhood does not have residential land zoned for large lots and 1 indicates that it does
+```
+
+
+### Log Transform Highly Skewed Variables for the evaluation dateset. 
+
+We identified in part 1 that 4 variables (medv, rad, dis, and lstat) are highly skewed, with skewness greater than 1. chas as a categorical variable will be treated as a factor. 
+
+```{r}
+crime_evaluation_transf <- crime_evaluation %>%
+  mutate(
+    medv = as.numeric(medv),
+    rad = as.numeric(rad),
+    dis = as.numeric(dis),
+    lstat = as.numeric(lstat)
+  ) %>%
+  mutate(
+    medv = if_else(is.numeric(medv) & !is.na(medv) & medv > 0, log(medv), NA_real_),
+    rad = if_else(is.numeric(rad) & !is.na(rad) & rad > 0, log(rad), NA_real_),
+    dis = if_else(is.numeric(dis) & !is.na(dis) & dis > 0, log(dis), NA_real_),
+    lstat = if_else(is.numeric(lstat) & !is.na(lstat) & lstat > 0, log(lstat), NA_real_)
+  )
+
+```
+
+#### Change Categorical Cariables to Factor 'chas'
+
+Finally, we change the two categorical variables in the dataset, chas and target, to factors. This transformation is crucial for statistical modeling, as it ensures that these variables are treated appropriately in terms of degrees of freedom. 
+
+
+```{r}
+crime_evaluation_transf$chas = as.factor(crime_evaluation_transf$chas)
+```
+
+#### Predictions: 
+
+|  Upon reviewing the outcomes of the four models, we determined that model three showcases the strongest predictive capability and displays the most resilient relationship with the underlying data. The utilized data transformations have effectively mitigated underlying skews and multicollinearity present within the dataset. Additionally, the model achieves a near-perfect AUC, underscoring its formidable predictive prowess.
+
+| We will proceed by applying this model (model3 = m3) to our evaluation data and generating predictions accordingly. The subsequent results closely resemble the distributions observed in our training data.
+
+```{r}
+crime_evaluation_transf$target_prob <- predict(m3, newdata = crime_evaluation_transf, type = "response")
+```
+
+```{r}
+# Convert probabilities to class
+predicted_labels_eval <- ifelse(crime_evaluation_transf$target_prob >= threshold, "1", "0")
+
+# Convert predicted labels to factors
+predicted_labels_factor_eval <- factor(predicted_labels_eval, levels = c("0", "1"))
+
+crime_evaluation_transf$target_factor <- predicted_labels_factor_eval
+```
+
+| The provided code writes the crime_evaluation_transf data frame to a CSV file named "Evaluation_Target.csv". This CSV file will contain the data from the crime_evaluation_transf data frame, without including row names.
+
+```{r eval-csv}
+write.csv(crime_evaluation_transf, paste0(getwd(),"/Evaluation_Target.csv"),row.names = FALSE)
+```
+
+# Conclusion: 
+
+| Through meticulous data exploration, preparation, and model development processes, we have effectively demonstrated the application of binary logistic regression to predict crime rates in diverse neighborhoods. The journey involved iterative refinement of logistic regression models, progressing from basic structures to more sophisticated ones that integrated transformations and variable selection techniques. The backward elimination method in Model 3 emerged as the optimal approach, striking a balance between model complexity and predictive performance, evident from its classification metrics and analysis of Variance Inflation Factor (VIF) values.
+
+| This model's proficiency in handling both binary and continuous variables, alongside its capability to directly incorporate transformations, highlights the versatility and robustness of logistic regression in addressing binary classification challenges. By adhering to a rigorous statistical analysis framework, we not only achieved the assignment's objective of predicting high-crime neighborhoods but also unearthed valuable insights into the intricate relationships between various predictors and crime rates 
+
+
+#### APPENDIX:
