@@ -807,4 +807,5 @@ write.csv(crime_evaluation_transf, paste0(getwd(),"/Evaluation_Target.csv"),row.
 | This model's proficiency in handling both binary and continuous variables, alongside its capability to directly incorporate transformations, highlights the versatility and robustness of logistic regression in addressing binary classification challenges. By adhering to a rigorous statistical analysis framework, we not only achieved the assignment's objective of predicting high-crime neighborhoods but also unearthed valuable insights into the intricate relationships between various predictors and crime rates 
 
 
-#### APPENDIX:
+# APPENDIX:
+https://github.com/FarhanaAkther23/DATA621/blob/main/DATA621%20HW%20%233/Data%20621%20Assignment%203.Rmd
