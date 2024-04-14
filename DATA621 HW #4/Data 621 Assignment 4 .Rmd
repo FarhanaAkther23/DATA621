@@ -69,8 +69,6 @@ insurance_evaluation <- read.csv("https://raw.githubusercontent.com/breboa/Data6
 
 ```
 
-\newpage
-
 ### Data Dimension:
 
 ```{r}
@@ -84,8 +82,6 @@ dim(insurance_training)
 insurance_training <- subset(insurance_training, select = -INDEX) 
 head(insurance_training)
 ```
-
-\newpage
 
 ### Descriptive Summary Statistics:
 
@@ -126,7 +122,9 @@ insurance_training %>%
 ```
 When we check the missing values for our categorical variables, we see that there are no missing values. However, when we look in the training dataset, we see that there are some blanks for the JOB variable. So we will correct that in our data preparation.
 
-# 2. DATA PREPRATION - LOGISTIC REGRESSION:
+\newpage
+
+# 2. DATA PREPRATION:
 
 |   In our data preparation, we seek to address a number of issues that will prevent us for creating statistically sound models. We write functions to:
 a. Fix formatting 
@@ -394,7 +392,7 @@ text(x = 1:length(prop_table),
 | To address this imbalance, we will employ an oversampling technique. Oversampling involves generating synthetic instances of the minority class (in this case, the positive class) to balance the class distribution. By increasing the representation of the minority class, the model will have an opportunity to learn patterns from both classes more effectively, potentially improving its overall performance and accuracy.
 
 
-### Oversampling and Splitting: 
+## Oversampling and Splitting: 
 
 Before we oversample to account for the imbalanced dataset, lets split the dataset into 80% training and 20% testing.This way our test dataset will not be affected by the over sampled process. We can use the ovun.sample() from ROSE package in order to take care of the imbalanced data.   
 
@@ -415,12 +413,15 @@ N <- max(2 * minority_count, nrow(train_data))
 train_data_balanced <- ovun.sample(TARGET_FLAG ~ ., data = train_data, N = N, seed = 42, method = "over")$data
 ```
 
+\newpage
 
 # 3. BUILDING AND SELECTING MODELS:
 
+## Binary Logistic Regression:
+
 Here we start with the binomial modeling that utilizes the feature set to predict the binary logistic regression model that includes all original feature predictor variables. TARGET_FLAG coded ‘1’ is a car that was in a crash and ‘0’ otherwise. 
 
-### Binary Logistic Regression Model 1: 
+## Binary Logistic Regression Model 1: 
 
 In Model 1, we'll exclude the TARGET_AMT column from our dataset because it represents the response variable for accident costs, making it unnecessary for our analysis. 
 
@@ -447,7 +448,7 @@ knitr::kable(vif(m1))
 
 We will focus on the GVIF, as it measures how much the variance of the estimated regression coefficients is increased due to multicollinearity, as we can see from above that EDUCATION, JOB and CAR_TYPE represents severe correlation. We shall see if the log transformation will reduce the VIF in the next model.    
 
-### Binary Logistic Regression Model 2:
+## Binary Logistic Regression Model 2:
 
 INCOME, BLUEBOOK, OLDCLAIM and HOME_VAL are right-skewed. To make results normal, they are log-transformed (adding 1 to make sure that log-transformation is possible for 0 values). 
 
@@ -466,7 +467,7 @@ knitr::kable(vif(m2))
 After running the log transformation it looks like the VIF for 'EDUCATION' and 'CAR_TYPE' has reduced but 'JOB' has increased. So, the variance of the estimated regression coefficients is increased approximately by 8 due to multicollinearity. In our next model (m3) will shift our focus to high-P values. We will remove the variable with higher P-values on our final model. 
 
 
-### Binary Logistic Regression Model 3: 
+## Binary Logistic Regression Model 3: 
 
 Let’s remove variables with higher P-values to create more models.
 
@@ -486,7 +487,7 @@ knitr::kable(vif(m3))
 Model 3 excludes some variables that were significant in Model 1 and Model 2, resulting in a higher AIC and residual deviance. In our last model we can see that all the variables statistically significant and the VIF values are also show very low to moderate correlation. Now, let's move on to the models selection based on classification model metrics
 
 
-## Logistic Regression Model Selection: 
+### Logistic Regression Model Selection: 
 
 | To begin, we adhered to the professor's instructions and set the threshold to 0.5. Subsequently, we converted probabilities into classes and transformed predicted labels into factors for each of our models. Finally, we conducted a Confusion Matrix analysis to assess their performance. 
 
@@ -580,7 +581,6 @@ row.names(eval) <- c("Model 1", "Model 2", "Model 3")
 knitr::kable(eval)
 ```
 
-
 #### Model Comparison:
 
 - Model 1 demonstrates the highest accuracy among the three models. However, it exhibits relatively low specificity, suggesting a potential tendency to over-predict the positive class.
@@ -594,10 +594,6 @@ Upon comprehensive evaluation of performance metrics including accuracy, sensiti
 Considering model complexity, encompassing the number of variables and interpretability, we prioritize parsimony for ease of interpretation and reduced risk of overfitting. While Model 2 might initially appear more parsimonious based on AIC and residual deviance, this aspect needs to be weighed against its sensitivity and specificity performance.
 
 Therefore, based on the comprehensive evaluation of metrics, Model 3 emerges as a favorable choice, offering a well-balanced trade-off between sensitivity and specificity, rendering it potentially the optimal choice overall.
-
-
-\newpage
-
 
 #### Classification Error Rate of the Predictions:
 
@@ -695,31 +691,13 @@ plot(roc, main = "ROC Curve For Model 3", colorize = FALSE)# Plot ROC curve
 text(0.5, 0.5, paste("AUC =", round(auc_value3, 4)), adj = c(0.5, -0.5), cex = 1.2)
 ```
 
-
 | Indeed, the AUC values obtained from the ROC curve appear slightly higher than both the accuracy and balanced accuracy metrics. Generally, AUC values closer to 1 indicate superior model performance, particularly in terms of classification discrimination.
-
 
 | The discrepancy between AUC and accuracy metrics suggests that our model's predictions are well-ranked or well-discriminated across different thresholds. This phenomenon can occur if a dataset is imbalanced or if the mis-classifications made by the model are not evenly distributed among classes. Therefore, we can interpret AUC values of 0.80 as reasonable, indicating that our model's predictions are well-separated between classes, even if the overall accuracy is slightly lower.
 
 \newpage
 
-# 4. EVALUATION:
-
-## 4.1 : LOGISTIC REGRESSION- EVALUATION:
-
-##### Predictions: 
-
-| After reviewing the outcomes of the three models, it's evident that model three exhibits the strongest predictive capability and maintains a robust relationship with the underlying data. The data transformations applied have effectively mitigated any underlying skews and multicollinearity issues within the dataset. Despite not reaching perfection, the model achieves a commendable AUC of 0.8032, underscoring its formidable predictive prowess.
-
-| We'll proceed by applying this model three (m3) to our evaluation data and generating predictions accordingly. The subsequent results closely resemble the distributions observed in our training data.
-
-
-```{r}
-A <- predict(m3, newdata = clean_evaluation, type = "response")
-clean_evaluation$TARGET_FLAG <- ifelse(A >= threshold, "1", "0")
-```
-
-### Multiple Linear Regression: 
+## Multiple Linear Regression: 
 
 Before we build the multiple regression models, let take a look at our distribution for response variable in multiple linear regression the 'TAGET_AMT'
 
@@ -737,7 +715,7 @@ hist(logdata)
 The situation has improved significantly with the presence of a prominent outlier at 0, considering the dataset's substantial imbalance, which cannot be rectified.
 
 
-### Multiple Regression Model 1: 
+## Multiple Regression Model 1: 
 
 For our first multiple linear regression, we will use the all predictors along with log transformation on the target variable. By including all predictors, we aim to capture combined effects and potential interactions between variables, thus providing a more detailed analysis of the data.
 
@@ -758,7 +736,7 @@ hist(resid(lm1), main="Histogram of Residuals")
 
 In the residuals vs fitted plot while there is a central tendency around the zero line, there are some visible patterns, such as a slight funnel shape. The diagnostic QQ plot also reveals a large deviation from normal in the upper quantiles that heavily affects the results. The residuals vs leverage plot shows there are significant outliers that are also affecting model performance. With the log transformation the histogram of the residuals appears to be more normal vs. without the log transformation that we have checked. We have decided not to include in our model since the log transformation has improved our model significantly. 
 
-### Multiple Regression Model 2: 
+## Multiple Regression Model 2: 
 
 In our subsequent multiple linear regression analysis, we adopted the log transformation approach for the response variable TARGET_AMT, coupled with stepwise feature selection, aimed at enhancing the previous findings. This iterative method enables us to enhance our model by focusing solely on the most significant features while accommodating the attributes of the transformed response variable. Our objective is to achieve improved performance compared to the initial analysis, thereby refining our understanding of the underlying relationships within the data.
 
@@ -780,7 +758,7 @@ hist(resid(lm2), main="Histogram of Residuals")
 
 While the residuals vs fitted plot has shown a slight improvement, there is still some visible patterns, such as a slight funnel shape. The diagnostic QQ plot also reveals a large deviation from normal in the upper quantiles that heavily affects the results. The residuals vs leverage plot shows there are significant outliers that are also affecting model performance. Again, the log transformation of the histogram of the residuals appears to be more normal vs. without the log transformation that we have checked. We have decided not to include in our model since the log transformation has improved our model significantly. 
 
-#### Multiple Regression Model Selection: 
+### Multiple Regression Model Selection: 
 
 ```{r}
 sum_lm1 <- summary(lm1)
@@ -804,13 +782,29 @@ print(paste0("F-statistic: ",sum_lm2$fstatistic[1]))
 
 From above, we can see that both models have very similar mean squared error, root mean squared error, and adjusted R-squared values, suggesting comparable predictive performance. However, Model 2 has a higher F-statistic compared to Model 1, indicating that Model 2 explains more variability in the target variable and is likely a better fit to the data.
 
-Therefore, based on the F-statistic and adjusted R-squared, Model 2 appears to be the preferred choice for model selection. It offers slightly better explanatory power and potentially improved predictive performance compared to Model 1.Therefore, we will opt for model 2 (lm2) for our prediction of TARGET_AMT. 
+Therefore, based on the F-statistic and adjusted R-squared, Model 2 appears to be the preferred choice for model selection. It offers slightly better explanatory power and potentially improved predictive performance compared to Model 1.Therefore, we will opt for model 2 (lm2) for our prediction of TARGET_AMT.
 
-## 4.2 EVALUATION:
+\newpage
 
-### MULTIPLE REGRESSION- EVALUATION:
+# 4. EVALUATION:
 
-#### Predictions:
+## 4.1 : Llogistic Rregression Evaluation:
+
+### Predictions: 
+
+| After reviewing the outcomes of the three models, it's evident that model three exhibits the strongest predictive capability and maintains a robust relationship with the underlying data. The data transformations applied have effectively mitigated any underlying skews and multicollinearity issues within the dataset. Despite not reaching perfection, the model achieves a commendable AUC of 0.8032, underscoring its formidable predictive prowess.
+
+| We'll proceed by applying this model three (m3) to our evaluation data and generating predictions accordingly. The subsequent results closely resemble the distributions observed in our training data.
+
+
+```{r}
+A <- predict(m3, newdata = clean_evaluation, type = "response")
+clean_evaluation$TARGET_FLAG <- ifelse(A >= threshold, "1", "0")
+```
+
+## 4.2 Multiple Linear Regression Evaluation:
+
+### Predictions:
 
 ```{r}
 clean_evaluation$TARGET_AMT <- exp(predict(lm2, newdata = clean_evaluation[,-(1:3)]))
@@ -833,4 +827,7 @@ The graph above provides confirmation that our model consistently predicts highe
 
 In this study, we aimed to understand the factors contributing to car crashes and predict repair costs using a dataset with 26 variables and over 8000 observations. We began by exploring and cleaning the data, then built two models: one for classification and one for regression. For classification, we trained three logistic regression models, prioritizing simplicity to avoid overfitting. Although Model 2 initially seemed simpler, we chose Model 3 for its balanced performance in sensitivity and specificity, resulting in the second-highest accuracy. For predicting repair costs, we created two multiple regression models. Model 2 showed better fit and predictive power than Model 1. Though our cost predictions weren't highly accurate, our model consistently predicted higher costs when the probability of accidents was higher. We believe our model could improve with predictor variable transformations. Additionally, we recommend exploring advanced modeling techniques like random forests or neural networks to enhance predictive performance further.
 
-###### Appendix: 
+### Appendix:
+
+https://raw.githubusercontent.com/FarhanaAkther23/DATA621/main/DATA621%20HW%20%234/Data%20621%20Assignment%204%20.Rmd
+
