@@ -1,0 +1,835 @@
+---
+title: "Data 621 Assignment 4"
+author: "Bridget Boakye, Hazal Gunduz and Farhana Akther"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    toc: yes
+    toc_depth: '3'
+    latex_engine: xelatex
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+\pagebreak
+
+
+# Overview:
+
+|   In this assignment, we will explore, analyze and model a data set containing approximately 8000 records, each representing a customer at an auto insurance company. Each record has two response variables. The first response variable, TARGET_FLAG, is binary. A “1” indicates that the customer was in a car crash while 0 indicates that they were not. The second response variable is TARGET_AMT. This value is 0 if the customer did not crash their car. However, if they did crash their car, this number will be a value greater than 0.
+
+| The objective is to build multiple linear regression and binary logistic regression models on the training data to predict whether a customer will crash their car and to predict the cost in the case of crash. We will only use the variables given to us (or variables that we derive from the variables provided).  
+
+## Loading libraries:
+
+```{r warning=FALSE, message=FALSE}
+library(stringr)
+library(ggcorrplot)
+library(dplyr)
+library(GGally)
+library(ggplot2)
+library(readr)
+library(reshape2)
+library(purrr)
+library(tidyr)
+library(corrplot)
+library(MASS)
+library(e1071)
+library(ROCR)
+library(pROC)
+library(car)
+library(glmnet)
+library(caTools)
+library(leaps)
+library(caret)
+library(ROSE) 
+library(mice)
+```
+
+
+# 1. DATA EXPLORATION:
+
+|   In this first step, we're going to look closely at the training data set to understand it better before we start preparing or modeling. 
+
+## Loading Data:
+
+|   The datasets (training and evaluation) has been uploaded to a GitHub repository, from which it has been loaded into the markdown using the code chunk provided below. The rationale behind uploading it to GitHub is to maintain the reproducibility of the work.
+
+```{r Data Importation}
+
+set.seed(2024)
+
+insurance_training <- read.csv("https://raw.githubusercontent.com/breboa/Data621/main/insurance_training_data.csv", header=TRUE, sep=",")
+insurance_evaluation <- read.csv("https://raw.githubusercontent.com/breboa/Data621/main/insurance-evaluation-data.csv", header=TRUE, sep=",")
+
+```
+
+\newpage
+
+### Data Dimension:
+
+```{r}
+head(insurance_training)
+dim(insurance_training)
+```
+
+|   Remove index column
+
+```{r}
+insurance_training <- subset(insurance_training, select = -INDEX) 
+head(insurance_training)
+```
+
+\newpage
+
+### Descriptive Summary Statistics:
+
+```{r}
+summary(insurance_training)
+```
+
+|   The summary confirms the following information about the predictors, which is also stated in their description: 
+|   There are 13 variables that contain discrete varibles (class: characters) while the remaining are continuous. Some variables that are categorized as discrete (eg. INCOME, HOME_VAL, OLDCLAIM, BLUEBOOK), however, are incorrect given the continuous values shown in the dataset head and will need to be categorized to the correct data type. 
+|   The continuous variables AGE, YOJ, and CAR_AGE containing missing variables. CAR_AGE also has a minimum value of -3 which does not make sense. 
+|   Some of the character values may also contain missing data but it isn't vible from summary. 
+|   Some of the character and numeric values have various prefixes that need to be cleaned. 
+|   Target variable, TARGET_FLAG, is characterized as continuous although it should be a factor (given the description of the variables in the assignment), as 0 and 1. 
+
+
+### Missing values for numerical data
+
+|   The following code calculates the percent of missing values across AGE, YOJ, and CAR_AGE. 
+
+```{r}
+insurance_training %>%
+  summarize(across(everything(), ~sum(is.na(.)) / n()))
+```
+
+|   It is clear that the missing values are only a low/moderate percentage of their respective variables:
+|   Missing values for AGE: 7.35 %
+|   YOJ: 5.56%
+|   and CAR_AGE: 6.25%
+
+
+### Check missing values for categorical variables
+
+```{r}
+insurance_training %>%
+  select_if(~is.character(.x) | is.factor(.x)) %>% 
+  map_df(~sum(is.na(.)), .id = "Variable") %>%
+  t()
+```
+When we check the missing values for our categorical variables, we see that there are no missing values. However, when we look in the training dataset, we see that there are some blanks for the JOB variable. So we will correct that in our data preparation.
+
+# 2. DATA PREPRATION - LOGISTIC REGRESSION:
+
+|   In our data preparation, we seek to address a number of issues that will prevent us for creating statistically sound models. We write functions to:
+a. Fix formatting 
+b. Correct data types
+c. Impute missing values using median and **Unspecified**
+d. Skewness 
+
+### a. Fix formatting - remove $ and z prefix 
+
+|   The presence of currency ($) notation for some columns (eg. INCOME, HOME_VAL, BLUVE_BOOK, AND OLDCLAIM) may disrupt our analysis and model building, necessitating the proper reformatting of those values 
+
+
+```{r}
+strip_dollars <- function(x){
+  x <- as.character(x)
+  x <- gsub(",", "", x)
+  x <- gsub("\\$", "", x)
+  as.numeric(x)
+}
+
+
+fix_formatting <- function(training_df) {
+  training_df <- training_df %>%
+    mutate(across(c(INCOME, HOME_VAL, BLUEBOOK, OLDCLAIM), strip_dollars))
+  
+  return(training_df)
+}
+```
+
+```{r}
+remove_value_prefixes <- function(training_df) {
+  targeted_cols <- c("MSTATUS", "SEX", "EDUCATION", "JOB", "CAR_TYPE", "URBANICITY")
+  
+  training_df <- training_df %>%
+    mutate(across(all_of(targeted_cols), ~str_replace_all(.x, "^z_", "")))
+  
+  training_df$EDUCATION <- str_replace_all(training_df$EDUCATION, "<", "Below ")
+  
+
+   return(training_df)
+}
+```
+
+
+### b. Transform to numeric data types function
+
+|   As discussed in the data exploration, INCOME, HOME_VAL, OLDCLAIM, and BLUEBOOK are categorized as discrete, character datatypes although their values are continuous. Here we can their datatype to numeric. 
+
+
+```{r}
+transform_numeric <- function(training_df){
+  training_df %>%
+    mutate(across(c("INCOME", "HOME_VAL", "BLUEBOOK", "OLDCLAIM", "TARGET_AMT"),
+                  ~as.numeric(as.character(.))))
+  
+   return(training_df)
+}
+```
+
+
+### c. Transform to factor data types function
+
+```{r}
+transform_to_factors <- function(training_df) {
+
+  training_df$URBANICITY <- factor(ifelse(str_detect(training_df$URBANICITY, "Highly Urban"),
+                                          "Urban",
+                                          ifelse(str_detect(training_df$URBANICITY, "Highly Rural"), 
+                                                 "Rural", 
+                                                 NA_character_)))
+  
+
+  training_df$JOB <- ifelse(training_df$JOB == "" | is.na(training_df$JOB), "UNSPECIFIED", training_df$JOB)
+  
+
+  factor_vars <- c("TARGET_FLAG", "CAR_TYPE", "CAR_USE", "EDUCATION", "JOB", 
+                   "MSTATUS", "PARENT1", "RED_CAR", "REVOKED", "SEX", "URBANICITY")
+  
+  training_df[factor_vars] <- lapply(training_df[factor_vars], factor)
+
+  return(training_df)
+  
+}
+```
+
+
+### d. Correct values for CAR < 0 
+ 
+```{r}
+correct_values <- function(training_df){
+  training_df %>%
+    rowwise() %>%
+    mutate(CAR_AGE = ifelse(CAR_AGE < 0, NA, CAR_AGE))%>%
+    ungroup()
+  
+   return(training_df)
+}
+```
+
+### e. Impute missing values
+
+```{r}
+impute_missing <- function(training_df) {
+  training_df <- training_df %>%
+    mutate(across(c(CAR_AGE, YOJ, AGE, INCOME, HOME_VAL), ~ifelse(is.na(.), median(., na.rm = TRUE), .))) %>%
+  return(training_df)
+}
+```
+
+### F. We apply the processing steps by running both the training and evaluation datasets through the fuctions above 
+
+```{r}
+clean_training <- insurance_training %>%
+  fix_formatting()  %>%
+  remove_value_prefixes()  %>%
+  transform_numeric() %>%
+  transform_to_factors () %>%
+  correct_values() %>%
+  impute_missing()
+head(clean_training)
+```
+
+```{r}
+clean_evaluation <- insurance_evaluation %>%
+  fix_formatting()  %>%
+  remove_value_prefixes()  %>%
+  transform_numeric() %>%
+  transform_to_factors () %>%
+  correct_values() %>%
+  impute_missing()
+head(clean_evaluation)
+```
+
+```{r}
+str(clean_training)
+```
+
+
+\newpage
+
+
+### Check distribution of all the variables: with a fairly clean dataset, we examine the distribution of the data 
+
+\newpage
+
+## Histogram 
+
+|   Histograms tell us how the data is distributed in the dataset (numeric fields).
+
+```{r}
+data_long <- clean_training %>%
+  select_if(is.numeric) %>%  
+  gather(key = "Variable", value = "Value")  
+
+ggplot(data_long, aes(x = Value)) + 
+  geom_histogram(bins = 30, fill = "gray", color = "black") + 
+  facet_wrap(~ Variable, scales = "free") + 
+  theme_minimal() + 
+  labs(x = "value", y = "Frequency") +
+ theme(axis.text.x = element_text(angle = 90, hjust = 1))
+```
+
+|   The histograms indicate that the distribution of AGE is roughly normal. The rest of the variables show some degree of skewness. Moreover, several variables have high occurrence of zeros.
+
+## Identifying highly skewed variabled: 
+
+|   From this "zoomed-in" histograms below, we see that the following variable -OLDCLAIM, INCOME, BLUEBOOK, HOME_VAL - are highly skewed. We will transform them during model building to access if that affects performance.
+
+```{r}
+clean_training %>% 
+  dplyr::select(OLDCLAIM, INCOME, BLUEBOOK, HOME_VAL) %>%
+  gather() %>% 
+  ggplot(aes(x= value)) + 
+  geom_histogram(fill='gray', color = "black") + 
+  facet_wrap(~key, scales = 'free')
+```
+
+## Boxplots of feature variables  
+
+|   We examine boxplots of the variables to identify outliers. 
+
+```{r}
+plot_vars <- c("TARGET_FLAG", names(keep(clean_training, is.numeric)))
+clean_training[plot_vars] %>%
+ dplyr::select(-TARGET_AMT) %>%
+ gather(variable, value, -TARGET_FLAG) %>%
+ ggplot(aes(x = TARGET_FLAG, y = value, color = TARGET_FLAG)) +
+ geom_boxplot() +
+ scale_color_brewer(palette = "Set1") +
+ theme_light() +
+ theme(legend.position = "none") +
+ facet_wrap(~variable, scales = "free", ncol = 5) +
+ labs(x = NULL, y = NULL)
+```
+
+
+|    Boxplots of the feature variables shows that some variables have outliers. Let's examine where the outliers lie in response to the TARGET PAYOUT. We'll also test a model where we remove outliers to assess if that impacts performance. 
+
+
+\pagebreak
+
+
+## Correlation
+
+|  We can also observe the correlation of our variables with each other and the target variable with a corrplot: 
+
+```{r}
+
+corr_dataframe = clean_training %>%
+  mutate_if(is.factor, as.numeric) %>%
+  select_if(is.numeric)
+
+q <- cor(corr_dataframe)
+
+ggcorrplot(q, 
+           type = "upper", 
+           outline.color = "white",
+           ggtheme = ggplot2::theme_classic,
+           colors = c("#6D9EC1", "white", "#E46726"),
+           lab = TRUE, 
+           show.legend = FALSE, 
+           tl.cex = 8, 
+           lab_size = 3)
+
+```
+
+|  The correlation plot shows the relationships between various variables and the target variable (TARGET_AMT). The MVR_PTS (number of motor vehicle records points), CLM_FREQ (claim frequency), and OLDCLAIM (previous claims indicator) have the strongest positive correlations with TARGET_AMT, suggesting that higher values of these variables are associated with higher claim amounts.
+
+|  On the other hand, CAR_AGE (age of the car) has a moderate negative correlation, implying that older cars tend to have lower claim amounts. BLUEBOOK (the resale value of the car) and HOME_VAL (home value) also show moderate positive correlations, indicating that higher resale values and home values are linked to higher claim amounts.
+
+|  Variables like INCOME, YOJ (years on job), HOMEKIDS (number of kids at home), and AGE exhibit relatively weaker correlations with the target variable. KIDSDRIV (number of kids driving) and TARGET_FLAG (whether a claim was made or not) have very weak correlations.
+
+
+## Checking for Imbalance Data
+
+We check for the balance of the data using our target variable, TARGET FLAG. If the data is imbalanced our model can be biased towards the target class that appears the most. 
+
+```{r}
+table(clean_training$TARGET_FLAG)
+prop.table(table(clean_training$TARGET_FLAG))
+```
+
+```{r}
+# Calculate proportions
+prop_table <- prop.table(table(clean_training$TARGET_FLAG)) * 100
+
+# Bar plot of TARGET_FLAG distribution with percentages
+barplot(table(clean_training$TARGET_FLAG), 
+        main = "Distribution of TARGET_FLAG",
+        xlab = "TARGET_FLAG",
+        ylab = "Frequency",
+        col = "gray",
+        border = "black")
+
+# Add percentages on each bar
+text(x = 1:length(prop_table), 
+     y = table(clean_training$TARGET_FLAG), 
+     labels = paste0(round(prop_table, 2), "%"), 
+     col = "black", 
+     pos = 1.5)
+```
+
+| The data and the plot exhibits a significant class imbalance, with only 26% of instances belonging to the positive class (those who have experienced an accident), while the remaining 74% belong to the negative class (those who have not experienced an accident). This severe imbalance in the dataset could adversely impact the model's accuracy during the model building stage if left untreated.
+
+| To address this imbalance, we will employ an oversampling technique. Oversampling involves generating synthetic instances of the minority class (in this case, the positive class) to balance the class distribution. By increasing the representation of the minority class, the model will have an opportunity to learn patterns from both classes more effectively, potentially improving its overall performance and accuracy.
+
+
+### Oversampling and Splitting: 
+
+Before we oversample to account for the imbalanced dataset, lets split the dataset into 80% training and 20% testing.This way our test dataset will not be affected by the over sampled process. We can use the ovun.sample() from ROSE package in order to take care of the imbalanced data.   
+
+```{r}
+# Split data into training and test sets
+set.seed(123) 
+train_index <- createDataPartition(clean_training$TARGET_FLAG, p = 0.8, list = FALSE)
+train_data <- clean_training[train_index, ]
+test_data <- clean_training[-train_index, ]
+
+# Identify the minority class count
+minority_count <- sum(train_data$TARGET_FLAG == 1)
+
+# Determine the desired size of the oversampled dataset
+N <- max(2 * minority_count, nrow(train_data))
+
+# Over-sample the minority class only in the training set
+train_data_balanced <- ovun.sample(TARGET_FLAG ~ ., data = train_data, N = N, seed = 42, method = "over")$data
+```
+
+
+# 3. BUILDING AND SELECTING MODELS:
+
+Here we start with the binomial modeling that utilizes the feature set to predict the binary logistic regression model that includes all original feature predictor variables. TARGET_FLAG coded ‘1’ is a car that was in a crash and ‘0’ otherwise. 
+
+### Binary Logistic Regression Model 1: 
+
+In Model 1, we'll exclude the TARGET_AMT column from our dataset because it represents the response variable for accident costs, making it unnecessary for our analysis. 
+
+```{r}
+set.seed(456)
+m1 <- glm(formula = TARGET_FLAG ~ . - TARGET_AMT, family = binomial(link = "logit"), data = train_data_balanced)
+summary(m1)
+```
+
+AIC(Akaike Information Criterion) values of 5867.8 measure of the relative quality of a statistical model for a given set of data. It is used as a measure of the model's goodness of fit while penalizing for the number of model parameters. A lower AIC value indicates a better model fit, with the "best" model being the one with the lowest AIC value. 
+
+#### The Variance Inflation Factor (VIF): 
+
+Lets check Variance Inflation Factor (VIF) to detect 'multicollinearity' in our models as quantifies the correlation and its strength between independent variables in a regression model. The interpretation of VIF values is as follows:
+
+  - VIF < 1: No correlation
+  - 1 < VIF < 5: Moderate correlation
+  - VIF > 5: Severe correlation
+
+
+```{r}
+knitr::kable(vif(m1))
+```
+
+We will focus on the GVIF, as it measures how much the variance of the estimated regression coefficients is increased due to multicollinearity, as we can see from above that EDUCATION, JOB and CAR_TYPE represents severe correlation. We shall see if the log transformation will reduce the VIF in the next model.    
+
+### Binary Logistic Regression Model 2:
+
+INCOME, BLUEBOOK, OLDCLAIM and HOME_VAL are right-skewed. To make results normal, they are log-transformed (adding 1 to make sure that log-transformation is possible for 0 values). 
+
+```{r}
+set.seed(789)
+m2 <- glm(formula = TARGET_FLAG ~ KIDSDRIV + log(INCOME + 1) + PARENT1 + log(HOME_VAL + 1) + MSTATUS + EDUCATION + JOB + TRAVTIME + CAR_USE + log(BLUEBOOK+1) + TIF + CAR_TYPE + log(OLDCLAIM+1) + CLM_FREQ + REVOKED + MVR_PTS + URBANICITY, family = binomial(link = "logit"), data = train_data_balanced)
+summary(m2)
+```
+
+The difference in AIC between model 1 (AIC: 5867.8) and model 2 (AIC: 5853.7) is 14.1, suggesting that both models provide similar fits to the data. Therefore, there is no strong evidence to favor one model over the other based on AIC alone. Now lets check VIF for model 2. 
+
+```{r}
+knitr::kable(vif(m2))
+```
+
+After running the log transformation it looks like the VIF for 'EDUCATION' and 'CAR_TYPE' has reduced but 'JOB' has increased. So, the variance of the estimated regression coefficients is increased approximately by 8 due to multicollinearity. In our next model (m3) will shift our focus to high-P values. We will remove the variable with higher P-values on our final model. 
+
+
+### Binary Logistic Regression Model 3: 
+
+Let’s remove variables with higher P-values to create more models.
+
+```{r}
+set.seed(1011)
+m3 <-glm(formula = TARGET_FLAG ~ KIDSDRIV + INCOME + PARENT1 + 
+    HOME_VAL + MSTATUS + TRAVTIME + 
+    CAR_USE + BLUEBOOK + TIF + CAR_TYPE + CLM_FREQ + REVOKED + MVR_PTS + URBANICITY, family = binomial(link = "logit"), 
+    data = train_data_balanced)
+summary(m3)
+```
+
+```{r}
+knitr::kable(vif(m3))
+```
+
+Model 3 excludes some variables that were significant in Model 1 and Model 2, resulting in a higher AIC and residual deviance. In our last model we can see that all the variables statistically significant and the VIF values are also show very low to moderate correlation. Now, let's move on to the models selection based on classification model metrics
+
+
+## Model Selection: 
+
+| To begin, we adhered to the professor's instructions and set the threshold to 0.5. Subsequently, we converted probabilities into classes and transformed predicted labels into factors for each of our models. Finally, we conducted a Confusion Matrix analysis to assess their performance. 
+
+
+```{r}
+# Set threshold as per instruction 
+threshold <- 0.5 
+```
+
+```{r}
+preds1 = predict(m1, newdata = test_data, type = "response")
+
+# Convert probabilities to class preds1
+predicted_labels1 <- ifelse(preds1 >= threshold, "1", "0")
+
+# Convert predicted labels to factors
+predicted_labels_factor1 <- factor(predicted_labels1, levels = c("0", "1"))
+```
+
+```{r}
+# Drop original variables
+test_data_trans <- subset(test_data, select = -c(INCOME, HOME_VAL, BLUEBOOK, OLDCLAIM))
+
+# Apply log transformation to INCOME
+test_data_trans$INCOME <- log(test_data$INCOME + 1)
+
+# Apply log transformation to HOME_VAL
+test_data_trans$HOME_VAL <- log(test_data$HOME_VAL + 1)
+
+# Apply log transformation to BLUEBOOK
+test_data_trans$BLUEBOOK <- log(test_data$BLUEBOOK + 1)
+
+# Apply log transformation to OLDCLAIM
+test_data_trans$OLDCLAIM <- log(test_data$OLDCLAIM + 1)
+
+preds2 = predict(m2, newdata = test_data_trans)
+
+# Convert probabilities to class preds2
+predicted_labels2 <- ifelse(preds2 >= threshold, "1", "0")
+
+# Convert predicted labels to factors
+predicted_labels_factor2 <- factor(predicted_labels2, levels = c("0", "1"))
+```
+
+```{r}
+preds3 = predict(m3, newdata = test_data , type = "response")
+
+# Convert probabilities to class preds3
+predicted_labels3 <- ifelse(preds3 >= threshold, "1", "0")
+
+# Convert predicted labels to factors
+predicted_labels_factor3 <- factor(predicted_labels3, levels = c("0", "1"))
+```
+
+#### Confusion Matrix:
+
+```{r}
+cm_m1 <- confusionMatrix(data=predicted_labels_factor1, test_data$TARGET_FLAG, mode = "everything")
+cat("Confusion Matrix Model 1:\n")
+print(cm_m1) 
+
+cm_m2 <- confusionMatrix(data=predicted_labels_factor2, test_data_trans$TARGET_FLAG, mode = "everything")
+cat("Confusion Matrix Model 2:\n")
+print(cm_m2)
+
+cm_m3 <- confusionMatrix(data=predicted_labels_factor3, test_data$TARGET_FLAG, mode = "everything")
+cat("Confusion Matrix Model 3:\n")
+print(cm_m3)
+```
+
+```{r}
+par(mfrow=c(2,2))
+fourfoldplot(cm_m1$table, color = c("black", "gray"), main="Model 1")
+fourfoldplot(cm_m2$table, color = c("black", "gray"), main="Model 2")
+fourfoldplot(cm_m3$table, color = c("black", "gray"), main="Model 3")
+```
+
+##### Logistic Regression Evaluation Metrics Summary:
+
+```{r}
+eval <- data.frame(cm_m1$byClass, 
+                   cm_m2$byClass, 
+                   cm_m3$byClass)
+eval <- data.frame(t(eval))
+
+# Add Accuracy to the evaluation dataframe
+eval$Accuracy <- c(cm_m1$overall["Accuracy"], cm_m2$overall["Accuracy"], cm_m3$overall["Accuracy"])
+
+eval <- dplyr::select(eval, Accuracy, Sensitivity, Specificity, Precision, Recall, F1, Balanced.Accuracy)
+row.names(eval) <- c("Model 1", "Model 2", "Model 3")
+knitr::kable(eval)
+```
+
+
+#### Model Comparison:
+
+- Model 1 demonstrates the highest accuracy among the three models. However, it exhibits relatively low specificity, suggesting a potential tendency to over-predict the positive class.
+
+- Model 2 showcases remarkably high specificity but significantly low sensitivity, resulting in an overall lower accuracy.
+
+- Model 3 presents a balanced performance, effectively balancing sensitivity and specificity, and consequently achieving the second-highest accuracy among the three models.
+
+Upon comprehensive evaluation of performance metrics including accuracy, sensitivity, specificity, precision, recall, F1 score, and balanced accuracy, Model 2 emerges with notable specificity but compromised sensitivity, leading to an overall diminished accuracy. Conversely, Model 3 exhibits a more balanced performance across these metrics.
+
+Considering model complexity, encompassing the number of variables and interpretability, we prioritize parsimony for ease of interpretation and reduced risk of overfitting. While Model 2 might initially appear more parsimonious based on AIC and residual deviance, this aspect needs to be weighed against its sensitivity and specificity performance.
+
+Therefore, based on the comprehensive evaluation of metrics, Model 3 emerges as a favorable choice, offering a well-balanced trade-off between sensitivity and specificity, rendering it potentially the optimal choice overall.
+
+
+\newpage
+
+
+### Classification Error Rate of the Predictions:
+
+Now lets take a took at the classification error rate and see if the accuracy and error rate sum up to one 1 for each of the models.
+
+**Classification Error Rate = FP + FN / TP + FP + TN + FN**
+
+
+**Classification error rate of the predictions Model 1:**
+
+```{r}
+confusion_matrix_m1 <- as.data.frame(table("Actual Class" = test_data$TARGET_FLAG, "Predicted Class" = predicted_labels_factor1))
+confusion_matrix_m1
+```
+
+```{r}
+class_error_rate1 <- (confusion_matrix_m1$Freq[3] + confusion_matrix_m1$Freq[2])/sum(confusion_matrix_m1$Freq)
+class_error_rate1
+```
+
+*Model 1 Verification of accuracy and error rate sum up to one 1*
+
+```{r}
+Accuracy1 <-  0.7921521
+Verify <- round(Accuracy1+class_error_rate1)
+print(Verify)
+```
+
+**Classification error rate of the predictions Model 2:**
+
+```{r}
+confusion_matrix_m2 <- as.data.frame(table("Actual Class" = test_data_trans$TARGET_FLAG, "Predicted Class" = predicted_labels_factor2))
+confusion_matrix_m2
+```
+
+```{r}
+class_error_rate2 <- (confusion_matrix_m2$Freq[3] + confusion_matrix_m2$Freq[2])/sum(confusion_matrix_m2$Freq)
+class_error_rate2
+```
+
+*Model 2 Verification of accuracy and error rate sum up to one 1*
+
+```{r}
+Accuracy2 <-  0.4800736
+Verify <- round(Accuracy2+class_error_rate2)
+print(Verify)
+```
+
+**Classification error rate of the predictions Model 3:**
+
+```{r}
+confusion_matrix_m3 <- as.data.frame(table("Actual Class" = test_data$TARGET_FLAG, "Predicted Class" = predicted_labels_factor3))
+confusion_matrix_m3
+```
+
+```{r}
+class_error_rate3 <- (confusion_matrix_m3$Freq[3] + confusion_matrix_m3$Freq[2])/sum(confusion_matrix_m3$Freq)
+class_error_rate3
+```
+
+*Model 3 Verification of accuracy and error rate sum up to one 1*
+
+```{r}
+Accuracy3 <-  0.7915389 
+Verify <- round(Accuracy3+class_error_rate3)
+print(Verify)
+```
+
+\newpage
+
+## ROC/AUC Curves:
+
+```{r}
+par(mfrow = c(1,3))
+
+# Plot for Model 1
+pred_obj <- prediction(preds1, test_data$TARGET_FLAG)
+auc_value <- performance(pred_obj, "auc")@y.values[[1]]
+roc <- performance(pred_obj, "tpr", "fpr") # Calculate ROC curve
+plot(roc, main = "ROC Curve For Model 1", colorize = FALSE) # Plot ROC curve
+text(0.5, 0.5, paste("AUC =", round(auc_value, 4)), adj = c(0.5, -0.5), cex = 1.2)
+
+# Plot for Model 2
+pred_obj2 <- prediction(preds2, test_data_trans$TARGET_FLAG)
+auc_value2 <- performance(pred_obj2, "auc")@y.values[[1]]
+roc <- performance(pred_obj2, "tpr", "fpr")# Calculate ROC curve
+plot(roc, main = "ROC Curve For Model 2", colorize = FALSE)# Plot ROC curve
+text(0.5, 0.5, paste("AUC =", round(auc_value2, 4)), adj = c(0.5, -0.5), cex = 1.2)
+
+# Plot for Model 3
+pred_obj3 <- prediction(preds3, test_data$TARGET_FLAG)
+auc_value3 <- performance(pred_obj3, "auc")@y.values[[1]]
+roc <- performance(pred_obj3, "tpr", "fpr")# Calculate ROC curve
+plot(roc, main = "ROC Curve For Model 3", colorize = FALSE)# Plot ROC curve
+text(0.5, 0.5, paste("AUC =", round(auc_value3, 4)), adj = c(0.5, -0.5), cex = 1.2)
+```
+
+
+
+| Indeed, the AUC values obtained from the ROC curve appear slightly higher than both the accuracy and balanced accuracy metrics. Generally, AUC values closer to 1 indicate superior model performance, particularly in terms of classification discrimination.
+
+
+| The discrepancy between AUC and accuracy metrics suggests that our model's predictions are well-ranked or well-discriminated across different thresholds. This phenomenon can occur if a dataset is imbalanced or if the mis-classifications made by the model are not evenly distributed among classes. Therefore, we can interpret AUC values of 0.80 as reasonable, indicating that our model's predictions are well-separated between classes, even if the overall accuracy is slightly lower.
+
+\newpage
+
+# 4. EVALUATION:
+
+#### LOGISTIC REGRESSION- EVALUATION:
+
+##### Predictions: 
+
+| After reviewing the outcomes of the three models, it's evident that model three exhibits the strongest predictive capability and maintains a robust relationship with the underlying data. The data transformations applied have effectively mitigated any underlying skews and multicollinearity issues within the dataset. Despite not reaching perfection, the model achieves a commendable AUC of 0.8032, underscoring its formidable predictive prowess.
+
+| We'll proceed by applying this model three (m3) to our evaluation data and generating predictions accordingly. The subsequent results closely resemble the distributions observed in our training data.
+
+
+```{r}
+A <- predict(m3, newdata = clean_evaluation, type = "response")
+clean_evaluation$TARGET_FLAG <- ifelse(A >= threshold, "1", "0")
+```
+
+### Multiple Linear Regression: 
+
+Before we build the multiple regression models, let take a look at our distribution for response variable in multiple linear regression the 'TAGET_AMT'
+
+```{r}
+hist(insurance_training$TARGET_AMT)
+```
+We can wee that the our target variable for multiple regression has too many zeros.One way to deal with these too zeros is to remove them from the dataset. However, ethically we should not remove them since this is problem and we do not want to alter the problem that presents in our data. Thus, we will use log transformation particularly log1p() in order to *improve* the distribution of our target variable. 
+
+
+```{r}
+logdata <- log1p(insurance_training$TARGET_AMT)
+hist(logdata)
+```
+
+The situation has improved significantly with the presence of a prominent outlier at 0, considering the dataset's substantial imbalance, which cannot be rectified.
+
+
+#### Multiple Regression Model 1: 
+
+For our first multiple linear regression, we will use the all predictors along with log transformation on the target variable. By including all predictors, we aim to capture combined effects and potential interactions between variables, thus providing a more detailed analysis of the data.
+
+```{r}
+lm1 <- lm(formula = log1p(TARGET_AMT) ~., data = train_data[,-(1)])
+summary(lm1)
+```
+
+The model's overall fit is described by the R-squared value of 0.2271, suggesting that around 22.71% of the variance in TARGET_AMT can be explained by the predictors included in the model.The R-squared value indicates a moderate predictive power of the model. However since we are doing multiple regression it's generally more appropriate to look at the adjusted R-squared (adjusted R²) rather than the regular R-squared (R²) as it takes into account the number of predictors in the model, penalizing the addition of unnecessary variables that do not contribute significantly to the model's explanatory power. The adjusted R-squared is a more robust metric for assessing the overall effectiveness of a multiple regression model. 
+
+The model's adjusted R-squared value of 0.2227 indicates that approximately 22.27% of the variability in the target amount can be explained by the predictors, after adjusting for the number of predictors in the model. Additionally, the F-statistic of 51.54 with a p-value less than 2.2e-16 suggests that the overall model is statistically significant, implying that at least one predictor variable has a non-zero effect on the target amount. However, we should be careful when interpreting the model's coefficients and significance levels, as they rely on the assumptions and limitations of linear regression analysis.
+
+```{r}
+par(mfrow=c(2,2))
+plot(lm1)
+hist(resid(lm1), main="Histogram of Residuals")
+```
+
+In the residuals vs fitted plot while there is a central tendency around the zero line, there are some visible patterns, such as a slight funnel shape. The diagnostic QQ plot also reveals a large deviation from normal in the upper quantiles that heavily affects the results. The residuals vs leverage plot shows there are significant outliers that are also affecting model performance. With the log transformation the histogram of the residuals appears to be more normal vs. without the log transformation that we have checked. We have decided not to include in our model since the log transformation has improved our model significantly. 
+
+#### Multiple Regression Model 2: 
+
+In our subsequent multiple linear regression analysis, we adopted the log transformation approach for the response variable TARGET_AMT, coupled with stepwise feature selection, aimed at enhancing the previous findings. This iterative method enables us to enhance our model by focusing solely on the most significant features while accommodating the attributes of the transformed response variable. Our objective is to achieve improved performance compared to the initial analysis, thereby refining our understanding of the underlying relationships within the data.
+
+```{r}
+lm2 <- stepAIC(lm1, trace = FALSE, direction = 'backward')
+summary(lm2)
+```
+
+The second multiple regression (lm2), which incorporates log transformation of the response variable and stepwise feature selection, demonstrates an adjusted R-squared value of 0.2229, this suggests that it explains a slightly larger proportion of the variability in the target variable compared to the first model, indicating better predictive performance. The F-statistic of 56.09 with a p-value less than 2.2e-16 suggests that the overall model is statistically significant, implying that at least one predictor variable has a non-zero effect on the target amount. 
+
+Comparatively, model 2 (lm2) exhibits a slightly higher adjusted R-squared value and a larger F-statistic compared to model 1 (lm1), indicating a better fit and stronger overall predictive power. Therefore, the second model may provide more accurate predictions of the target amount compared to the initial analysis
+
+
+```{r}
+par(mfrow=c(2,2))
+plot(lm2)
+hist(resid(lm2), main="Histogram of Residuals")
+```
+
+While the residuals vs fitted plot has shown a slight improvement, there is still some visible patterns, such as a slight funnel shape. The diagnostic QQ plot also reveals a large deviation from normal in the upper quantiles that heavily affects the results. The residuals vs leverage plot shows there are significant outliers that are also affecting model performance. Again, the log transformation of the histogram of the residuals appears to be more normal vs. without the log transformation that we have checked. We have decided not to include in our model since the log transformation has improved our model significantly. 
+
+## MODEL SELECTION: 
+
+```{r}
+sum_lm1 <- summary(lm1)
+RSS <- c(crossprod(lm1$residuals))
+MSE <- RSS/length(lm1$residuals)
+print(paste0("Mean Squared Error: ", MSE)) 
+print(paste0("Root MSE: ", sqrt(MSE)))
+print(paste0("Adjusted R-squared: ", sum_lm1$adj.r.squared))
+print(paste0("F-statistic: ",sum_lm1$fstatistic[1]))
+```
+
+```{r}
+sum_lm2 <- summary(lm2)
+RSS <- c(crossprod(lm2$residuals))
+MSE <- RSS/length(lm2$residuals)
+print(paste0("Mean Squared Error: ", MSE)) 
+print(paste0("Root MSE: ", sqrt(MSE))) 
+print(paste0("Adjusted R-squared: ", sum_lm2$adj.r.squared))
+print(paste0("F-statistic: ",sum_lm2$fstatistic[1]))
+```
+
+From above, we can see that both models have very similar mean squared error, root mean squared error, and adjusted R-squared values, suggesting comparable predictive performance. However, Model 2 has a higher F-statistic compared to Model 1, indicating that Model 2 explains more variability in the target variable and is likely a better fit to the data.
+
+Therefore, based on the F-statistic and adjusted R-squared, Model 2 appears to be the preferred choice for model selection. It offers slightly better explanatory power and potentially improved predictive performance compared to Model 1.Therefore, we will opt for model 2 (lm2) for our prediction of TARGET_AMT. 
+
+
+### MULTIPLE REGRESSION- EVALUATION:
+
+#### Predictions:
+
+```{r}
+clean_evaluation$TARGET_AMT <- exp(predict(lm2, newdata = clean_evaluation[,-(1:3)]))
+```
+
+##### Visualization of Predictions 
+
+```{r}
+clean_evaluation <- cbind(clean_evaluation, A)
+```
+
+```{r}
+ggplot(data = clean_evaluation,  mapping = aes(x= A, y = TARGET_AMT)) +
+  geom_point(color = "black", size = 2)+labs(x="Predicted Probability of Accident Happening", y="Cost")+theme_bw()
+```
+The graph above provides confirmation that our model consistently predicts higher costs as the probability of accidents increases.
+
+# 5. CONCLUSION:
+
+In this study, we aimed to understand the factors contributing to car crashes and predict repair costs using a dataset with 26 variables and over 8000 observations. We began by exploring and cleaning the data, then built two models: one for classification and one for regression. For classification, we trained three logistic regression models, prioritizing simplicity to avoid overfitting. Although Model 2 initially seemed simpler, we chose Model 3 for its balanced performance in sensitivity and specificity, resulting in the second-highest accuracy. For predicting repair costs, we created two multiple regression models. Model 2 showed better fit and predictive power than Model 1. Though our cost predictions weren't highly accurate, our model consistently predicted higher costs when the probability of accidents was higher. We believe our model could improve with predictor variable transformations. Additionally, we recommend exploring advanced modeling techniques like random forests or neural networks to enhance predictive performance further.
+
+###### Appendix: 
