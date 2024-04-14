@@ -486,7 +486,7 @@ knitr::kable(vif(m3))
 Model 3 excludes some variables that were significant in Model 1 and Model 2, resulting in a higher AIC and residual deviance. In our last model we can see that all the variables statistically significant and the VIF values are also show very low to moderate correlation. Now, let's move on to the models selection based on classification model metrics
 
 
-## Model Selection: 
+## Logistic Regression Model Selection: 
 
 | To begin, we adhered to the professor's instructions and set the threshold to 0.5. Subsequently, we converted probabilities into classes and transformed predicted labels into factors for each of our models. Finally, we conducted a Confusion Matrix analysis to assess their performance. 
 
@@ -564,7 +564,7 @@ fourfoldplot(cm_m2$table, color = c("black", "gray"), main="Model 2")
 fourfoldplot(cm_m3$table, color = c("black", "gray"), main="Model 3")
 ```
 
-##### Logistic Regression Evaluation Metrics Summary:
+#### Logistic Regression Evaluation Metrics Summary:
 
 ```{r}
 eval <- data.frame(cm_m1$byClass, 
@@ -599,7 +599,7 @@ Therefore, based on the comprehensive evaluation of metrics, Model 3 emerges as 
 \newpage
 
 
-### Classification Error Rate of the Predictions:
+#### Classification Error Rate of the Predictions:
 
 Now lets take a took at the classification error rate and see if the accuracy and error rate sum up to one 1 for each of the models.
 
@@ -668,7 +668,7 @@ print(Verify)
 
 \newpage
 
-## ROC/AUC Curves:
+#### ROC/AUC Curves:
 
 ```{r}
 par(mfrow = c(1,3))
@@ -696,7 +696,6 @@ text(0.5, 0.5, paste("AUC =", round(auc_value3, 4)), adj = c(0.5, -0.5), cex = 1
 ```
 
 
-
 | Indeed, the AUC values obtained from the ROC curve appear slightly higher than both the accuracy and balanced accuracy metrics. Generally, AUC values closer to 1 indicate superior model performance, particularly in terms of classification discrimination.
 
 
@@ -706,7 +705,7 @@ text(0.5, 0.5, paste("AUC =", round(auc_value3, 4)), adj = c(0.5, -0.5), cex = 1
 
 # 4. EVALUATION:
 
-#### LOGISTIC REGRESSION- EVALUATION:
+## 4.1 : LOGISTIC REGRESSION- EVALUATION:
 
 ##### Predictions: 
 
@@ -738,7 +737,7 @@ hist(logdata)
 The situation has improved significantly with the presence of a prominent outlier at 0, considering the dataset's substantial imbalance, which cannot be rectified.
 
 
-#### Multiple Regression Model 1: 
+### Multiple Regression Model 1: 
 
 For our first multiple linear regression, we will use the all predictors along with log transformation on the target variable. By including all predictors, we aim to capture combined effects and potential interactions between variables, thus providing a more detailed analysis of the data.
 
@@ -759,7 +758,7 @@ hist(resid(lm1), main="Histogram of Residuals")
 
 In the residuals vs fitted plot while there is a central tendency around the zero line, there are some visible patterns, such as a slight funnel shape. The diagnostic QQ plot also reveals a large deviation from normal in the upper quantiles that heavily affects the results. The residuals vs leverage plot shows there are significant outliers that are also affecting model performance. With the log transformation the histogram of the residuals appears to be more normal vs. without the log transformation that we have checked. We have decided not to include in our model since the log transformation has improved our model significantly. 
 
-#### Multiple Regression Model 2: 
+### Multiple Regression Model 2: 
 
 In our subsequent multiple linear regression analysis, we adopted the log transformation approach for the response variable TARGET_AMT, coupled with stepwise feature selection, aimed at enhancing the previous findings. This iterative method enables us to enhance our model by focusing solely on the most significant features while accommodating the attributes of the transformed response variable. Our objective is to achieve improved performance compared to the initial analysis, thereby refining our understanding of the underlying relationships within the data.
 
@@ -781,7 +780,7 @@ hist(resid(lm2), main="Histogram of Residuals")
 
 While the residuals vs fitted plot has shown a slight improvement, there is still some visible patterns, such as a slight funnel shape. The diagnostic QQ plot also reveals a large deviation from normal in the upper quantiles that heavily affects the results. The residuals vs leverage plot shows there are significant outliers that are also affecting model performance. Again, the log transformation of the histogram of the residuals appears to be more normal vs. without the log transformation that we have checked. We have decided not to include in our model since the log transformation has improved our model significantly. 
 
-## MODEL SELECTION: 
+#### Multiple Regression Model Selection: 
 
 ```{r}
 sum_lm1 <- summary(lm1)
@@ -807,6 +806,7 @@ From above, we can see that both models have very similar mean squared error, ro
 
 Therefore, based on the F-statistic and adjusted R-squared, Model 2 appears to be the preferred choice for model selection. It offers slightly better explanatory power and potentially improved predictive performance compared to Model 1.Therefore, we will opt for model 2 (lm2) for our prediction of TARGET_AMT. 
 
+## 4.2 EVALUATION:
 
 ### MULTIPLE REGRESSION- EVALUATION:
 
@@ -816,7 +816,7 @@ Therefore, based on the F-statistic and adjusted R-squared, Model 2 appears to b
 clean_evaluation$TARGET_AMT <- exp(predict(lm2, newdata = clean_evaluation[,-(1:3)]))
 ```
 
-##### Visualization of Predictions 
+## Visualization of both Predictions:
 
 ```{r}
 clean_evaluation <- cbind(clean_evaluation, A)
@@ -826,6 +826,7 @@ clean_evaluation <- cbind(clean_evaluation, A)
 ggplot(data = clean_evaluation,  mapping = aes(x= A, y = TARGET_AMT)) +
   geom_point(color = "black", size = 2)+labs(x="Predicted Probability of Accident Happening", y="Cost")+theme_bw()
 ```
+
 The graph above provides confirmation that our model consistently predicts higher costs as the probability of accidents increases.
 
 # 5. CONCLUSION:
