@@ -1,0 +1,473 @@
+---
+title: "Data 621 Assignment 5"
+author: "Bridget Boakye, Hazal Gunduz and Farhana Akther"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: 
+    toc: yes
+    toc_depth: '3'
+    latex_engine: xelatex
+  html_document:
+    toc: yes
+    toc_depth: '3'
+    toc_float: yes
+editor_options: 
+  chunk_output_type: inline
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(readr)
+library(tidyverse)
+library(glmnet)
+library(mice)
+library(psych)
+library(pROC)
+library(caret)
+library(MASS)
+library(corrplot)
+library(DataExplorer)
+library(pscl)
+```
+
+## INTRODUCTION:
+
+In this research, we aim to explore, analyze, and construct a model using a dataset comprising details about approximately 12,000 commercially available wines. The majority of the variables pertain to the chemical attributes of the wines in question. The dependent variable is the quantity of wine cases procured by wine distribution companies subsequent to sampling a particular wine. These cases are intended for providing tasting samples to restaurants and wine retailers across the United States. The higher the number of sample cases purchased, the greater the likelihood of a wine being stocked at upscale dining establishments. A major wine producer is analyzing this data to forecast the volume of wine cases ordered based on the wine's characteristics. By accurately predicting the quantity of cases, the producer can tailor their wine offerings to optimize sales.
+
+Our objective is to build a count regression model to predict the number of cases of wine that will be sold given certain properties of the wine. Below is a short description of the variables of interest in the data set:
+
+![](Variables of interest.jpg) 
+
+## **1. DATA EXPLORATION:**
+
+In this segment, our focus is on loading and examining the training dataset. Our objective is to acquaint ourselves with various variables, distinguishing between dependent and independent variables, and examining their distributions. The task at hand involves tallying the number of wines sold with specific properties, implying our engagement with numerous variables as such problems hinge on multiple factors. Without further ado, let's commence by loading the dataset.
+
+### **Loading The Data:**
+
+The datasets (training and evaluation) have been uploaded to a GitHub repository. They were then loaded into the markdown using the provided code chunk. The decision to upload them to GitHub was driven by the aim to uphold the reproducibility of the work.
+
+```{r warning=FALSE, message=FALSE}
+wine_training <- read_csv("https://raw.githubusercontent.com/FarhanaAkther23/DATA621/main/DATA621%20HW%20%235/wine-training-data.csv")
+wine_evalutaion <- read_csv("https://raw.githubusercontent.com/FarhanaAkther23/DATA621/main/DATA621%20HW%20%235/wine-evaluation-data.csv")
+```
+
+Let’s display the fist few rows of the data set to check if everything has been loaded into our work environment correctly
+
+```{r}
+head(wine_training)
+```
+
+We can observe that all the columns mentioned in the dataset introduction are present. Now, let's examine the dimensions of the dataset.
+
+### **Check The Dimensions, Descriptive Summary and Distributions:**
+
+```{r}
+dim(wine_training)
+```
+We have a total of 16 columns and 12,795 observations. Among these columns, one is an INDEX column, which typically isn't necessary for analysis purposes. Therefore, let's proceed by removing it from our dataset. We remove the unwanted columns from our evaluation dataset.
+
+```{r}
+wine_training <- wine_training[-1]
+```
+
+```{r}
+wine_evalutaion <- wine_evalutaion[-c(1,2)]
+```
+
+Let's take another look at the descriptive summary of our training dataset. 
+
+```{r}
+summary(wine_training)
+```
+
+We've observed multiple missing values in the dataset, and the columns exhibit a wide range of values. The mean of the TARGET column is approximately 3. To determine if the Poisson distribution would be suitable for modeling later on, we can also inspect the variance.
+
+```{r}
+var(wine_training$TARGET)
+```
+Although the choice of distribution for modeling should be based on a deeper understanding of the data and the underlying process generating it, since the variance (3.710895) is very close to the mean (3.029) of the TARGET column, we believe that the Poisson distribution could be an optimal fit. 
+
+\newpage
+
+#### Visual Representation of Missing Variables:
+
+Let's visualize at the multiple missing values in the dataset
+
+
+```{r}
+plot_missing(wine_training)
+```
+
+\newpage
+
+
+```{r}
+plot_missing(wine_evalutaion)
+```
+
+
+Based on our summary statistics and the visual representation provided above, it's evident that approximately half of our predictor variables exhibit missing values. Ranked from the least to the most missing values, these variables are "pH", "ResidualSugar", "Chlorides", "FreeSulfurDioxide", "Alcohol", "TotalSulfurDioxide", "Sulphates", and "STARS"
+
+
+Now, let's examine the structure of the dataset.
+
+```{r}
+str(wine_training)
+```
+```{r}
+str(wine_evalutaion)
+```
+
+It appears that certain columns do not have the correct data type, necessitating correction. For example, the 'STARS' column was intended to be nominal rather than numeric, so we'll need to address that. Additionally, we can visualize the distribution of all columns and their correlation with our 'TARGET' column, as demonstrated below:
+
+\newpage
+
+```{r}
+par(mfrow = c(3,5))
+plot_histogram(wine_training)
+```
+
+\newpage
+
+The pairs.panels function creates scatterplot matrices for subsets of variables. Each scatterplot shows the relationship between two variables by plotting one against the other
+
+```{r}
+pairs.panels(wine_training[, c(1, 2:6)], main = "Scatter Plot Matrix for Training Dataset")
+pairs.panels(wine_training[, c(1, 7:11)], main = "")
+pairs.panels(wine_training[, c(1, 11:15)], main = "")
+```
+
+- The diagonal panels display histograms or density plots of each variable. These plots show the distribution of values for each variable individually.
+- As we can observe, most of these variables has zero to weak correlation among themselves aside from 'Label/Appeal' and 'STARS', which has a correlation of 0.33. 
+-  Label/Appeal and STARS also have high positive correlation with 'TARGET' variables where 'AcidIndex' has a weak to moderate negative correlation with 'TARGET'.
+
+\newpage
+
+## **2. DATA PREPARATION:**
+
+In this section, we'll prepare our data for modeling. One step involves setting the data type for columns such as STARS and converting them into factors. This adjustment ensures a more suitable data type for modeling purposes.
+
+### **Fixing The Data Types:**
+
+```{r}
+wine_training$STARS <- as.factor(wine_training$STARS)
+wine_evalutaion$STARS <- as.factor(wine_evalutaion$STARS)
+```
+
+```{r}
+str(wine_training)
+```
+```{r}
+str(wine_evalutaion)
+```
+
+
+### **Imputing The Missing Values:**
+
+Given the combination of continuous and categorical variables in our dataset, it's essential to employ a method capable of handling both types effectively. Our preferred approach is to utilize the **random forest method**. Random forest is adept at managing both continuous and categorical data types, making it a robust choice for imputation. Moreover, as an ensemble method, it offers a superior approach to prediction tasks. We will utilize the imputation method Multiple Imputation By Chained Equation (MICE).  
+
+```{r}
+set.seed(1)
+wine_training <- mice(wine_training, m=5, maxit = 3, method = 'rf')
+wine_training <- complete(wine_training)
+```
+
+```{r}
+set.seed(2)
+wine_evalutaion <- mice(wine_evalutaion, m=5, maxit = 3, method = 'rf')
+wine_evalutaion <- complete(wine_evalutaion)
+```
+
+\newpage
+
+Let's do a quick re-check of any missing values in both of the training and evaluation the datasets.
+
+```{r}
+sum(is.na(wine_training))
+plot_missing(wine_training)
+```
+
+
+```{r}
+sum(is.na(wine_evalutaion))
+plot_missing(wine_evalutaion)
+```
+
+
+With our prepared dataset in place, we're ready to proceed and create our models.
+
+\newpage
+
+## **3. BUILDING MODELS:** 
+
+As per the instructions, we will build two Poisson regression models, two negative binomial models, and two two multiple regression models. For all of the models, we build one base model with the clean, imputed data from our data preparation then create extended or reduced model on the basis of the variables with the highest P-values or interaction terms. Our goal is to compare these models to determine which delivers the most effective performance.
+
+### **Splitting the Data set:**
+
+We split our data into an additional training and test set in order to use 80% of it in the models and then evaluate their performance with the predictions against the remaining 20%. 
+
+
+```{r}
+set.seed(32)
+split <- createDataPartition(wine_training$TARGET, p=.80, list=FALSE)
+
+train <- wine_training[split, ]
+test <- wine_training[ -split, ]
+```
+
+
+### **Poisson Regression (p1):**
+
+
+```{r}
+
+p1 <- glm(formula = TARGET ~ ., family = poisson, data = train)
+summary(p1)
+```
+
+Our summary results show that the STARS variable, specifically STARS3 and STAR4, has the most substantial positive effect among the predictors listed, which makes sense given that high number of stars, ie. wine rated as 4 or 3 stars would have a higher effect on TARGET, which is the quantity of wine cases procured by wine distribution companies subsequent to sampling a particular wine. AcidIndex has the most negative effect on TARGET.  This model's AIC is 37600, and quite high so we will see if other models provide a better fit of the model to the data. Generally though, the large gap between the Null Deviance and the Residual Deviance suggests that the model with predictors explains a significant portion of the variation compared to the null model, which includes no predictors.
+
+
+### **Poisson Regression (p2):**
+
+For our second poisson model, we build a model from stepwise variable selection using AIC as the criterion.
+
+```{r}
+
+p2 <- stepAIC(glm(formula = TARGET ~ ., family = poisson, data = train), 
+                          direction = "both")
+
+summary(p2)
+```
+
+
+Using the step-wise varable selection, we are able to reduce our AIC for the model:
+glm(formula = TARGET ~ VolatileAcidity + CitricAcid + Chlorides + 
+    FreeSulfurDioxide + TotalSulfurDioxide + Sulphates + Alcohol + 
+    LabelAppeal + AcidIndex + STARS, family = poisson, data = train)
+    
+However, the AIC of 37598 is not much lower than the base model AIC of 37600. This suggests that some feature selection or a different model may be more apts for the data. However, the variables selected for this model are intuitive, with a selection of the variables with highest positive and negative impacts on TARGET. 
+
+\newpage
+
+### **Negative Binomial Model(nb1):**
+
+```{r warning=FALSE}
+
+nb1 <- glm.nb(formula = TARGET ~ . , data=train)
+summary(nb1)
+
+```
+
+This is the summary for the base negative binomia model, often used for count data that exhibit overdispersion, where the variance exceeds the mean. Our model, as discussed in the data preparation stage, does not exhibit dispersion as our TARGET mean is close to its variance. For this mode, the ACID INDEX variable has the highest negative impact on the target variable, as indicated by its coefficient. Variables such as 'LabelAppeal', 'STARS2', 'STARS3', and 'STARS4' have strong positive effects on the target, with 'STARS4' showing the largest positive coefficient. This maps on to the results we saw for the Poisson model. Unique the possion model however, the associated p values with the variable coefficients indicate their significance, with '***' indicating a p-value less than 0.001, suggesting a very strong evidence against the null hypothesis of no effect. The model's AIC is 37604, slightly higher than the base Poisson and Step-wise Poisson suggesting that overdispersion may not be an issue afterall.
+
+
+### **Negative Binomial Model(nb2):**
+
+For the second negative binomial model, we consider building an automated the search for useful interactions by using a stepwise approach to add the most significant interactions (indicated by scope = list(upper = . ~ .^2) which suggests that the computer can try out not only the original predictors but also their interactions) one at a time.
+
+However, this model takes a while to run and is computationally expensive so we choose one interaction term to explore 
+
+```{r}
+
+#nb2 <- stepAIC(nb1, scope = list(upper = . ~ .^2), 
+#                               direction = "forward", trace = FALSE)
+
+#summary(step_improved_model)
+
+```
+
+
+We add an interaction term for 'STARS' and 'LabelAppeal' as they have the highest coefficients, positive effect on TARGET. The appeal of a label might be associated with the number of STARS the wine receives in a way that affects the target variable together more than individually, then it would make sense to test for an interaction between these two variables.
+
+
+```{r warning=FALSE}
+
+nb2 <- update(nb1, . ~ . + STARS:LabelAppeal)
+summary(nb2)
+
+```
+
+The interaction term for STARS and LabelAppeal appear to improve the model.The interaction terms are statistically significant, indicating that the effect of 'LabelAppeal' on the target variable changes depending on the level of the 'STARS' ratings. Specifically, 'LabelAppeal:STARS2' has a positive coefficient (2.117e-01), suggesting that the combined effect of having a higher label appeal and being in the 'STARS2' category increases the expected count of the target more than either would individually. This complementary effect is also observed with 'LabelAppeal:STARS3' and 'LabelAppeal:STARS4', with their coefficients indicating a notable increase in the expected count when both are high. Moreover, AcidIndex. continues to have a strong negative relationship with the target variable, and while the model's AIC has decreased slightly to 37448 from the previous model without interactions (37604), suggesting a better fit, we need to ensure that the model is not overfitting the data and that the added complexity genuinely improves its predictive performance.
+
+\newpage
+
+### **Multiple Linear Regression(lm1):**
+
+```{r}
+
+lm1 <- lm(formula = TARGET ~ ., data = train)
+summary(lm1)
+
+```  
+  
+Approximately 44.26% of the variation in 'TARGET' is explained by the model, y predictors with significant positive impacts on the target include 'LabelAppeal' and 'STARS', with 'STARS' having a particularly robust effect. On the negative side, 'VolatileAcidity' and 'Chlorides' significantly decrease the target, with 'AcidIndex' showing the most substantial negative influence. Some predictors, such as 'FixedAcidity', 'Density', 'pH', and 'Sulphates', do not show a significant relationship with the target at the 5% level. The residual standard error suggests that the model's predictions are, on average, about 1.436 units away from the actual values, while the highly significant F statistic suggests a significant relationship between predictors and the TARGET, as should be expected. 
+
+### **Multiple Linear Regression(lm2):**
+
+Build a stepwise model using backward and forward selection
+
+```{r}
+
+lm2 <- step(lm1, data = train, direction="both")
+summary(lm2)
+
+```  
+
+The best model by AIC with step is lm(formula = TARGET ~ VolatileAcidity + CitricAcid + Chlorides + 
+    FreeSulfurDioxide + TotalSulfurDioxide + Density + Sulphates + 
+    Alcohol + LabelAppeal + AcidIndex + STARS, data = train)
+
+It's R-squared and adjusted R-squared are 0.4425 and 0.4419 respectively. This is a slightly improved fit compared to the previous full model. Variables like 'VolatileAcidity', 'CitricAcid', 'Chlorides', 'FreeSulfurDioxide', 'TotalSulfurDioxide', 'LabelAppeal', 'AcidIndex', and 'STARS' remain significant predictors, with 'AcidIndex' and 'STARS' still showing strong negative and positive effects, respectively. The coefficients for 'Density' and 'Sulphates', which were not significant in the previous model, are no longer present, indicating their exclusion may have contributed to the improved model fit. The significance levels for 'Alcohol' have changed, now showing a positive relationship with 'TARGET' at the 5% significance level. This model maintains robust explanatory power while potentially offering increased parsimony, or simplicity. 
+
+\newpage
+
+### **Zero Inflation Poisson(zip1):**
+
+Run a zero inflation model with distribution poisson, and STARS as the predictor for whether an observation will be one of the excess zeros or not.
+
+```{r warning=FALSE}
+
+zip1 <- zeroinfl(formula = TARGET ~ . |STARS, data = train, dist = "negbin")
+summary(zip1)
+
+```
+
+In this zero-inflated Poisson regression modelm the count part (non-zero counts) is predicted by various variables, and the zero-inflation part is predicted by 'STARS'. The count model indicates that 'VolatileAcidity' and 'AcidIndex' significantly decrease the target count, whereas 'Alcohol' and 'LabelAppeal' substantially increase it, as evidenced by their coefficients and low p-values. In the zero-inflation part, 'STARS' has a significant negative coefficient, suggesting that higher 'STARS' ratings are associated with a lower probability of excess zeros in the target variable. This implies that when 'STARS' is high, the outcome is less likely to be zero than predicted by the Poisson component alone. 
+
+### **Zero Inflation Poisson(zip2):** 
+
+For our second model, we consider interactions between significant variables  as we did with the negative binomial model.
+
+```{r}
+
+zip2 <- zeroinfl(formula = TARGET ~ . + Alcohol:LabelAppeal | STARS, data = train, dist = "negbin")
+summary(zip2)
+
+```
+
+The updated zero-inflated Poisson model indicates a nuanced relationship between these variables and the target count. 'Alcohol' and 'LabelAppeal' both have significant positive effects on the target variable, suggesting that increases in these predictors are associated with higher counts. However, the interaction term between them is not statistically significant (p-value > 0.05), implying that the combined effect of 'Alcohol' and 'LabelAppeal' on the target does not significantly differ from the effect of these variables considered separately. 'VolatileAcidity' and 'AcidIndex' continue to negatively influence the target. In the zero-inflation part of the model, 'STARS' has a strong negative effect, indicating its important role in predicting the excess zeros. Compared to the previous model without the interaction term, the inclusion of 'Alcohol:LabelAppeal' does not seem to offer additional explanatory power regarding the occurrence of non-zero counts, as evidenced by the p-value associated with the interaction term.
+
+\newpage
+
+## 4. SELECTING MODELS AND EVALUATION:
+
+### **Model Performance and Selection:**
+
+To help with model selection, let's test each of our models against the 'test' validation set. 
+
+
+```{r}
+model_test <- function(model, test, trainY) {
+  # Evaluate Model 1 with testing data set
+  predictedY <- predict(model, newdata = test)
+  model_results <- data.frame(obs = trainY, pred = predictedY)
+  colnames(model_results) = c('obs', 'pred')
+  
+  # This grabs RMSE, Rsquared and MAE by default
+  model_eval <- defaultSummary(model_results)
+  
+  # Add AIC score to the results
+  if ('aic' %in% model) {
+    model_eval[4] <- model$aic
+  } else {
+    model_eval[4] <- AIC(model)
+  }
+  
+  names(model_eval)[4] <- 'aic'
+ 
+  # Add BIC score to the results
+  model_eval[5] <- BIC(model)
+  names(model_eval)[5] <- 'bic'
+  
+  
+  model_eval[6] <- paste0(deparse(substitute(model)))
+  names(model_eval)[6] <- "model"
+   
+  return(model_eval)
+  }
+```
+
+
+```{r}
+trainY <- test %>% 
+  dplyr::select(TARGET)
+
+models = list(p1, p2, nb1, nb2, lm1, lm2, zip1, zip2)
+
+
+Poisson1_eval = model_test(p1, test, trainY)
+Poisson2_eval = model_test(p2, test, trainY)
+NegBinom1_eval= model_test(nb1, test, trainY)
+NegBinom2_eval= model_test(nb2, test, trainY)
+MultLinear1_eval= model_test(lm1, test, trainY)
+MultLinear2_eval= model_test(lm2, test, trainY)
+ZIP1_eval= model_test(zip1, test, trainY)
+ZIP2_eval= model_test(zip2, test, trainY)
+
+models_summary <- rbind(Poisson1_eval, Poisson2_eval, NegBinom1_eval, NegBinom2_eval, MultLinear1_eval, MultLinear2_eval, ZIP1_eval, ZIP2_eval)
+```
+
+
+```{r}
+models_summary
+```
+
+
+To examine the model here, we can compare the performance of each model based on these metrics. Here's an analysis of the provided models:
+
+-The models 'MultLinear1' and 'MultLinear2' exhibit the lowest MAE and RMSE, indicating superior predictive performance compared to the other models.
+-Among the remaining models, 'ZIP1' and 'ZIP2' also demonstrate relatively low MAE and RMSE values, suggesting reasonably good performance.
+-The models 'Poisson1', 'Poisson2', 'NegBinom1', and 'NegBinom2' have higher MAE and RMSE compared to the linear models, indicating potentially inferior predictive performance.
+-The AIC and BIC are both measures of the relative quality of statistical models, with lower values indicating better fit and model parsimony.
+-The ZIP2 model has the lowest AIC value (34390.818), indicating it provides a relatively better trade-off between goodness of fit and model complexity.
+-The NegBinom2 model also has a relatively low AIC (37447.982), suggesting good performance.
+-Again, ZIP2 has the lowest BIC value (34557.197), indicating it provides the best balance between fit and complexity.
+-Similar to AIC, NegBinom2 also has a relatively low BIC (37599.894), suggesting good performance.
+
+Based on AIC and BIC alone, ZIP2 seems to be the best-performing model, followed by NegBinom2.
+
+\newpage
+
+### **Predictions on Evaluation Dataset:**
+
+We make our final predictions, create a dataframe with the predictions. We see that our predictions have a similar shape to our training TARGET variable.  
+
+```{r}
+eval_data <- wine_evalutaion
+ 
+predictions <- predict(zip2, eval_data)
+
+eval_data$TARGET <- predictions
+
+write.csv(eval_data, 'eval_predictions.csv', row.names=FALSE)
+
+head(eval_data)
+```
+
+Here is the histogram of our predictions
+
+```{r}
+hist(predictions)
+```
+
+
+
+### **CONCLUSION:**
+
+In this study, we employed rigorous analytic techniques, leveraging statistical methods and machine learning algorithms to construct predictive models capable of forecasting wine case volumes with precision. Our findings reveal the significance of various chemical attributes in influencing the procurement of wine cases and highlight key factors driving consumer preferences and market dynamics. By utilizing these insights, wine producers can tailor their product offerings strategically, aligning them with consumer demand and preferences to enhance sales performance.
+
+Among the models evaluated, 'ZIP2_eval' exhibited the best overall performance, demonstrating the lowest RMSE, MAE, AIC, and BIC values. This indicates superior predictive performance and model fit compared to the other models.
+
+Our goal is to help wine producers make better decisions using data analysis. We used predictive models to give them tools for navigating the changing wine market, helping them grow and succeed over time. By leveraging these insights, wine producers can strategically adapt their product offerings to align with evolving consumer preferences, thereby enhancing sales performance and sustaining success in the competitive wine market.
+
+Moving forward, further refinement of predictive models and incorporation of additional variables could enhance forecasting accuracy and provide deeper insights into consumer behavior and market trends. Additionally, exploring advanced machine learning techniques and expanding the dataset to include a broader range of variables may uncover new opportunities for improving predictive performance and gaining a more comprehensive understanding of market dynamics.
+
+
+### APPENDIX:
+
+#### Sources:
+
+https://www.analyticsvidhya.com/blog/2022/05/handling-missing-values-with-random-forest/
+
